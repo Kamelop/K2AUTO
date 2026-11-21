@@ -9786,65 +9786,103 @@ local function findCodeTextBox()
 	return nil
 end
 
--- UI-only submission: locate the game's actual Submit GuiButton.
--- Search the whole PlayerGui because the Codes screen may be nested differently
--- from the originally assumed Codes.Codes hierarchy.
+-- Auto-submit using the same UI-event submission approach as the supplied working script.
+-- It locates the Codes TextBox and the game's Submit button, then triggers the
+-- button's existing UI event connections (with Activate as a normal UI fallback).
 local function fireSubmitButton()
-    refreshCodeObjects()
-
     local pg = LP:FindFirstChildOfClass("PlayerGui")
     if not pg then
-        warn("[K2] PlayerGui not available while searching for Submit")
+        warn("[K2] PlayerGui unavailable while searching for Submit")
         return false
     end
 
-    local target = _submitBtn
-    if not (target and target:IsA("GuiButton") and target.Parent) then
-        target = nil
-        local codesRoot = pg:FindFirstChild("Codes")
-        local roots = {}
-        if codesRoot then table.insert(roots, codesRoot) end
-        table.insert(roots, pg)
+    local codesRoot = pg:FindFirstChild("Codes")
+    if not codesRoot then
+        warn("[K2] Codes UI not found. Open the Codes panel first.")
+        return false
+    end
 
-        -- Pass 1: exact Instance.Name == "Submit".
-        for _, root in ipairs(roots) do
-            for _, obj in ipairs(root:GetDescendants()) do
-                if obj.Name == "Submit" and obj:IsA("GuiButton") and obj.Parent then
-                    target = obj
-                    break
-                end
-            end
-            if target then break end
-        end
+    -- Match the supplied script's hierarchy: PlayerGui.Codes.Codes.Main,
+    -- while allowing the Main container to be nested differently.
+    local codesLayer = codesRoot:FindFirstChild("Codes") or codesRoot
+    local main = codesLayer:FindFirstChild("Main") or codesLayer:FindFirstChild("Main", true) or codesLayer
 
-        -- Pass 2: a button whose displayed text is exactly "Submit".
-        if not target then
-            for _, obj in ipairs(pg:GetDescendants()) do
-                if obj:IsA("TextButton") and obj.Parent
-                    and tostring(obj.Text):lower():match("^%s*submit%s*$") then
-                    target = obj
-                    break
-                end
+    local target = nil
+    local preferred = main:FindFirstChild("Submit")
+    if preferred and preferred:IsA("GuiButton") then
+        target = preferred
+    end
+
+    -- Search the Codes UI specifically, prioritizing an Instance named Submit.
+    if not target then
+        for _, obj in ipairs(codesRoot:GetDescendants()) do
+            if obj.Name:lower() == "submit" and obj:IsA("GuiButton") then
+                target = obj
+                break
             end
         end
     end
 
-    if not (target and target:IsA("GuiButton") and target.Parent) then
-        warn("[K2] Could not find a GuiButton named Submit under PlayerGui. Check that the Codes panel is open.")
+    -- Some interfaces name the button differently but display Submit on it.
+    if not target then
+        for _, obj in ipairs(codesRoot:GetDescendants()) do
+            if obj:IsA("TextButton")
+                and tostring(obj.Text):lower():match("^%s*submit%s*$") then
+                target = obj
+                break
+            end
+        end
+    end
+
+    if not target then
+        warn("[K2] Submit GuiButton not found under PlayerGui.Codes")
         return false
     end
 
     _submitBtn = target
-    local ok, err = pcall(function()
-        target:Activate()
-    end)
-    if not ok then
-        warn("[K2] Submit button activation failed:", err)
-        return false
+
+    -- Use the same event-connection method as the supplied auto-submit code.
+    local getconns = (typeof(getconnections) == "function" and getconnections)
+        or (debug and typeof(debug.getconnections) == "function" and debug.getconnections)
+
+    local function fireSignal(signal)
+        if not getconns or not signal then return false end
+        local ok, connections = pcall(getconns, signal)
+        if not ok or type(connections) ~= "table" then return false end
+        local fired = false
+        for _, connection in ipairs(connections) do
+            if connection.Enabled ~= false then
+                local callback
+                pcall(function() callback = connection.Function end)
+                local success = false
+                if type(callback) == "function" then
+                    success = pcall(task.spawn, callback)
+                else
+                    success = pcall(function() connection:Fire() end)
+                end
+                fired = fired or success
+            end
+        end
+        return fired
     end
 
-    print("[K2] Activated Submit button:", target:GetFullName())
-    return true
+    local clicked = false
+    pcall(function() clicked = fireSignal(target.MouseButton1Click) or clicked end)
+    pcall(function() clicked = fireSignal(target.Activated) or clicked end)
+
+    -- Standard GuiButton activation fallback if event connections are unavailable.
+    if not clicked then
+        local ok, err = pcall(function() target:Activate() end)
+        clicked = ok
+        if not ok then warn("[K2] Submit activation failed:", err) end
+    end
+
+    if clicked then
+        print("[K2] Auto-submitted through:", target:GetFullName())
+    else
+        warn("[K2] Submit button was found, but its UI action could not be triggered")
+    end
+    return clicked
 end
 
 -- No remote probing or direct server calls. Redemption is submitted
