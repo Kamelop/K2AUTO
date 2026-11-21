@@ -1,8 +1,3 @@
-
-
-
-
-
 --[[
   K2 CODE SNIPER V2 — notifier + capture
   - "code" / "code is" / "use code" / "riddle is" = NOTIFIER only (never types that line)
