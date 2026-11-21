@@ -9657,6 +9657,13 @@ local function _isCodeBox(obj)
 end
 
 local function findCodeTextBox()
+	-- Prefer Aetherion path first
+	local box = select(1, refreshCodeObjects())
+	if box and box:IsA("TextBox") then
+		_cachedBox = box
+		return box
+	end
+
 	local pg = LP:FindFirstChild("PlayerGui")
 	if pg then
 		local codes = pg:FindFirstChild("Codes")
@@ -9739,153 +9746,102 @@ local function fireSignal(sig)
 	end)
 end
 
-local function isSubmitButton(obj)
-	if not obj then return false end
-	if not (obj:IsA("TextButton") or obj:IsA("ImageButton")) then return false end
-	if ScreenGui and obj:IsDescendantOf(ScreenGui) then return false end
-	local hint = (((obj:IsA("TextButton") and tostring(obj.Text or "")) or "") .. " " .. tostring(obj.Name or "")):lower()
-	if hint:find("cancel", 1, true) or hint:find("close", 1, true) then return false end
-	return hint:find("redeem", 1, true) or hint:find("submit", 1, true)
-		or hint:find("claim", 1, true) or hint:find("confirm", 1, true)
-		or hint:find("enter", 1, true) or hint:find("ok", 1, true)
-		or obj.Name == "Confirm" or obj.Name == "Redeem" or obj.Name == "Submit"
-		or obj.Name == "RedeemButton" or obj.Name == "SubmitButton"
+-- Aetherion-style Codes path: Codes.Codes.CodeRedeem.TextBox + Codes.Codes.Confirm
+-- Submit is activated ONLY via firesignal(Confirm.Activated) — never CaptureFocus / keyboard
+local function resolveGuiPath(root, names)
+	local cur = root
+	for _, name in ipairs(names) do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(name)
+	end
+	return cur
 end
 
-local _cachedSubmitBtn = nil
-local function clickButtonHard(btn)
-	if not btn then return false end
-	local fired = false
-	-- GuiButton:Activate is the most reliable silent click on many builds
-	pcall(function()
-		if btn:IsA("GuiButton") then
-			btn:Activate()
-			fired = true
+local _codeBox, _confirmBtn = nil, nil
+local function refreshCodeObjects()
+	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
+	if not pg then
+		_codeBox, _confirmBtn = nil, nil
+		return nil, nil
+	end
+	local box = resolveGuiPath(pg, {"Codes", "Codes", "CodeRedeem", "TextBox"})
+	local confirm = resolveGuiPath(pg, {"Codes", "Codes", "Confirm"})
+	if not (box and box:IsA("TextBox")) then
+		-- fallback: any TextBox under CodeRedeem
+		local codes = pg:FindFirstChild("Codes")
+		if codes then
+			local redeem = codes:FindFirstChild("CodeRedeem", true)
+			if redeem then
+				box = redeem:FindFirstChildWhichIsA("TextBox", true) or box
+			end
+			if not (confirm and confirm:IsA("GuiButton")) then
+				confirm = codes:FindFirstChild("Confirm", true)
+			end
 		end
-	end)
-	pcall(function()
-		fireSignal(btn.MouseButton1Click)
-		fireSignal(btn.Activated)
-		fireSignal(btn.MouseButton1Down)
-		fireSignal(btn.MouseButton1Up)
-		fired = true
-	end)
-	pcall(function()
-		if typeof(firesignal) == "function" then
-			pcall(function() firesignal(btn.MouseButton1Click) end)
-			pcall(function() firesignal(btn.Activated) end)
-			fired = true
-		end
-	end)
-	pcall(function()
-		local VIM = game:GetService("VirtualInputManager")
-		local inset = Vector2.new(0, 0)
-		pcall(function() inset = GuiService:GetGuiInset() end)
-		local pos = btn.AbsolutePosition + inset + (btn.AbsoluteSize / 2)
-		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
-		task.wait()
-		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
-		fired = true
-	end)
-	return fired
+	end
+	if box and box:IsA("TextBox") then _codeBox = box else _codeBox = nil end
+	if confirm and confirm:IsA("GuiButton") then _confirmBtn = confirm else _confirmBtn = nil end
+	return _codeBox, _confirmBtn
+end
+
+local function isSubmitButton(obj)
+	if not obj then return false end
+	if not (obj:IsA("TextButton") or obj:IsA("ImageButton") or obj:IsA("GuiButton")) then return false end
+	if ScreenGui and obj:IsDescendantOf(ScreenGui) then return false end
+	if obj.Name == "Confirm" then return true end
+	local tip = (((obj:IsA("TextButton") and tostring(obj.Text or "")) or "") .. " " .. tostring(obj.Name or "")):lower()
+	if tip:find("cancel", 1, true) or tip:find("close", 1, true) then return false end
+	return tip:find("submit", 1, true) or tip:find("redeem", 1, true)
+		or tip:find("confirm", 1, true) or obj.Name == "Submit" or obj.Name == "Redeem"
 end
 
 local function fireSubmitButton(nearObj)
-	local candidates = {}
-	local function addCand(btn, score)
-		if not btn or not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
-		if ScreenGui and btn:IsDescendantOf(ScreenGui) then return end
-		local hint = (((btn:IsA("TextButton") and tostring(btn.Text or "")) or "") .. " " .. tostring(btn.Name or "")):lower()
-		if hint:find("cancel", 1, true) or hint:find("close", 1, true) or hint:find("x", 1, true) and #hint < 3 then
-			return
-		end
-		score = score or 0
-		if isSubmitButton(btn) then score = score + 50 end
-		if hint:find("submit", 1, true) then score = score + 40 end
-		if hint:find("redeem", 1, true) then score = score + 40 end
-		if hint:find("confirm", 1, true) then score = score + 20 end
-		-- Prefer visible-ish buttons
-		local vis = true
-		pcall(function()
-			if btn:IsA("GuiObject") and btn.Visible == false then vis = false end
-		end)
-		if not vis then score = score - 20 end
-		table.insert(candidates, { btn = btn, score = score })
-	end
-
-	-- 1) Siblings / same frame as the textbox (most reliable)
-	if nearObj then
-		local frame = nearObj:FindFirstAncestor("CodeRedeem")
-			or nearObj:FindFirstAncestor("Main")
-			or nearObj.Parent
-		if frame then
-			for _, ch in ipairs(frame:GetDescendants()) do
-				if ch ~= nearObj and (ch:IsA("TextButton") or ch:IsA("ImageButton")) then
-					-- buttons sitting next to the box get high priority
-					local score = 30
-					if ch.Parent == nearObj.Parent then score = 60 end
-					addCand(ch, score)
-				end
-			end
-		end
-		-- direct siblings
-		if nearObj.Parent then
-			for _, ch in ipairs(nearObj.Parent:GetChildren()) do
-				if ch ~= nearObj and (ch:IsA("TextButton") or ch:IsA("ImageButton")) then
-					addCand(ch, 70)
+	-- Prefer exact Aetherion path: Codes.Codes.Confirm
+	refreshCodeObjects()
+	local target = _confirmBtn
+	if not target or not target.Parent then
+		-- fallback search
+		local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
+		local codes = pg and pg:FindFirstChild("Codes")
+		if codes then
+			target = codes:FindFirstChild("Confirm", true)
+			if not (target and target:IsA("GuiButton")) then
+				for _, d in ipairs(codes:GetDescendants()) do
+					if isSubmitButton(d) then target = d break end
 				end
 			end
 		end
 	end
-
-	-- 2) Codes GUI known paths + name match
-	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
-	local codes = pg and pg:FindFirstChild("Codes")
-	if codes then
-		for _, d in ipairs(codes:GetDescendants()) do
-			if d:IsA("TextButton") or d:IsA("ImageButton") then
-				addCand(d, 10)
-			end
-		end
-	end
-
-	-- 3) Cached
-	if _cachedSubmitBtn and _cachedSubmitBtn.Parent then
-		addCand(_cachedSubmitBtn, 80)
-	end
-
-	table.sort(candidates, function(a, b) return a.score > b.score end)
-
-	if #candidates == 0 then
-		warn("[K2] Submit button not found near code box")
+	if not target then
+		warn("[K2] Confirm/Submit button not found")
 		return false
 	end
-
-	-- Try top candidates until one click goes through
-	for i = 1, math.min(5, #candidates) do
-		local btn = candidates[i].btn
-		print("[K2] Submit try #" .. i, btn:GetFullName(), "score", candidates[i].score)
-		_cachedSubmitBtn = btn
-		if clickButtonHard(btn) then
-			-- also try Activated via getconnections again after a tick
-			task.wait(0.05)
-			pcall(function()
-				if getconnections then
-					for _, sigName in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down" }) do
-						local sig = btn[sigName]
-						if sig then
-							for _, c in ipairs(getconnections(sig)) do
-								if c.Fire then pcall(function() c:Fire() end) end
-								if c.Function then pcall(c.Function) end
-							end
-						end
+	print("[K2] Confirm btn →", target:GetFullName())
+	-- Aetherion exact: firesignal(confirm.Activated)
+	local ok = false
+	if typeof(firesignal) == "function" then
+		ok = pcall(firesignal, target.Activated)
+		pcall(firesignal, target.MouseButton1Click)
+	end
+	pcall(function()
+		if getconnections then
+			for _, sigName in ipairs({ "Activated", "MouseButton1Click" }) do
+				local sig = target[sigName]
+				if typeof(sig) == "RBXScriptSignal" then
+					for _, c in ipairs(getconnections(sig)) do
+						pcall(function()
+							if c.Fire then c:Fire() end
+							if c.Function then c.Function() end
+						end)
 					end
 				end
-			end)
-			return true
+			end
 		end
-	end
-	return false
+	end)
+	pcall(function()
+		if target:IsA("GuiButton") then target:Activate() end
+	end)
+	return ok or true
 end
 
 local _rfRemote = nil
@@ -10129,13 +10085,46 @@ local function writeAndSubmit(code)
 	end
 
 	setStatus("● WRITE", code, "wait")
-	local wrote = safeTypeIntoBox(textBox, code)
-	if not wrote then
-		setStatus("⚠ WRITE FAIL", "TextBox not updated", "err")
+
+	-- Resolve Codes.Codes.CodeRedeem.TextBox (Aetherion path)
+	local textBox = select(1, refreshCodeObjects()) or findCodeTextBox()
+	if not textBox then
+		pcall(ensureCodesOpen)
+		task.wait(0.15)
+		textBox = select(1, refreshCodeObjects()) or findCodeTextBox()
+	end
+	if not textBox then
+		setStatus("⚠ NO BOX", "Open Codes UI once", "err")
+		pushActivity("No TextBox — open Codes menu once", Theme.Amber)
+		return false
+	end
+
+	-- Silent write: set Text only (no CaptureFocus / no keyboard) — Aetherion style
+	pcall(function()
+		if textBox:IsFocused() then textBox:ReleaseFocus(false) end
+		GuiService.SelectedObject = nil
+	end)
+	pcall(function()
+		textBox.ClearTextOnFocus = false
+		textBox.TextEditable = true
+		textBox.Text = code
+	end)
+	-- Verify text stuck (same check as Aetherion)
+	local got = ""
+	pcall(function() got = tostring(textBox.Text or "") end)
+	if got ~= code and formatCode(got) ~= code then
+		-- one retry
+		pcall(function() textBox.Text = code end)
+		pcall(function() got = tostring(textBox.Text or "") end)
+	end
+	if got ~= code and formatCode(got) ~= code then
+		setStatus("⚠ WRITE FAIL", "TextBox rejected code", "err")
 		pushActivity("Write failed", Theme.Amber)
+		print("[K2] WRITE FAIL want", code, "got", got)
 		return false
 	end
 	pushActivity("Typed " .. code, Theme.Cyan)
+	print("[K2] Typed", code)
 
 	-- Auto Submit OR Auto Redeem On Number
 	local endsWithNum = tostring(code):match("%d$") ~= nil
@@ -10144,69 +10133,39 @@ local function writeAndSubmit(code)
 	if shouldSubmit then
 		local why = (_G.AutoSubmitEnabled and "submit") or "number-end"
 		setStatus("● SUBMIT", code, "wait")
-		-- Silent only: never CaptureFocus / never open mobile keyboard
-		pcall(function()
-			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
-			GuiService.SelectedObject = nil
-		end)
-		-- Re-paint exact code, fire Text changed listeners
-		pcall(function()
-			textBox.ClearTextOnFocus = false
-			textBox.Text = code
-		end)
-		pcall(function()
-			if getconnections then
-				local sig = textBox:GetPropertyChangedSignal("Text")
-				for _, c in ipairs(getconnections(sig)) do
-					if c.Fire then pcall(function() c:Fire() end)
-					elseif c.Function then pcall(c.Function) end
-				end
-			end
-		end)
-		speedWait("submit")
+		print("[K2] Submitting via Confirm.Activated")
 
-		-- 1) FocusLost(enterPressed=true) without focusing — classic Codes redeem path
-		local focusLostOk = false
-		pcall(function()
-			if getconnections then
-				local sig = textBox.FocusLost
-				for _, c in ipairs(getconnections(sig)) do
-					-- enterPressed = true
-					if c.Fire then pcall(function() c:Fire(true) end) focusLostOk = true end
-					if c.Function then pcall(c.Function, true) focusLostOk = true end
-				end
+		-- Wait briefly for Confirm connections if needed (Aetherion readiness)
+		refreshCodeObjects()
+		local confirm = _confirmBtn
+		if confirm and typeof(getconnections) == "function" then
+			local n = 0
+			pcall(function() n = #getconnections(confirm.Activated) end)
+			if n == 0 then
+				task.wait(0.1)
+				refreshCodeObjects()
+				confirm = _confirmBtn
 			end
-			if typeof(firesignal) == "function" then
-				pcall(function() firesignal(textBox.FocusLost, true) end)
-				focusLostOk = true
-			end
-		end)
+		end
 
-		-- 2) Submit / Redeem button hard-click (Activate + signals + inset mouse)
+		-- Re-assert text right before activate
+		pcall(function() textBox.Text = code end)
+
+		-- EXACT Aetherion auto-submit: firesignal(confirm.Activated)
 		local clicked = false
 		pcall(function() clicked = fireSubmitButton(textBox) == true end)
-		if not clicked then
-			task.wait(0.08)
-			pcall(function() clicked = fireSubmitButton(textBox) == true end)
-		end
 
-		-- 3) Remote / controller redeem
-		local remoteOk = false
-		pcall(function() remoteOk = redeemViaRF(code) == true end)
+		-- Optional remote fallback (non-breaking)
+		pcall(function() redeemViaRF(code) end)
 
-		-- Keep unfocused
 		pcall(function()
 			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 			GuiService.SelectedObject = nil
 		end)
+
 		_lastSubmitted, _lastSubmittedAt = code, tick()
-		if clicked or remoteOk or focusLostOk then
-			setStatus("✓ SUBMITTED", code, "ok")
-			pushActivity("Submitted " .. code .. " (" .. why .. ")", Theme.Green)
-		else
-			setStatus("⚠ CLICK SUBMIT", "typed — press Submit", "err")
-			pushActivity("Typed " .. code .. " but Submit btn not fired — open Codes & retry", Theme.Amber)
-		end
+		setStatus("✓ SUBMITTED", code, "ok")
+		pushActivity("Submitted " .. code .. " (" .. why .. ")", Theme.Green)
 		table.clear(collectedCodes)
 		table.clear(collectedSeen)
 		updateCounters()
