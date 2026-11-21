@@ -1,3 +1,8 @@
+
+
+
+
+
 --[[
   K2 CODE SNIPER V2 — notifier + capture
   - "code" / "code is" / "use code" / "riddle is" = NOTIFIER only (never types that line)
@@ -9656,6 +9661,8 @@ local function _isCodeBox(obj)
 	return sz.X >= 80 and sz.Y >= 20 and sz.Y <= 80
 end
 
+local refreshCodeObjects -- forward declaration; findCodeTextBox uses this helper below
+
 local function findCodeTextBox()
 	-- Prefer Aetherion path first
 	local box = select(1, refreshCodeObjects())
@@ -9758,7 +9765,7 @@ local function resolveGuiPath(root, names)
 end
 
 local _codeBox, _confirmBtn = nil, nil
-local function refreshCodeObjects()
+refreshCodeObjects = function()
 	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
 	if not pg then
 		_codeBox, _confirmBtn = nil, nil
