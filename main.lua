@@ -9658,6 +9658,57 @@ end
 
 local refreshCodeObjects -- forward declaration; findCodeTextBox uses this helper below
 
+-- Resolve a known hierarchy without assuming every UI layer exists.
+local function resolveGuiPath(root, names)
+	local cur = root
+	for _, name in ipairs(names) do
+		if not cur then return nil end
+		cur = cur:FindFirstChild(name)
+	end
+	return cur
+end
+
+local _codeBox, _confirmBtn = nil, nil
+
+-- Refresh references because the game's Codes UI may be recreated.
+refreshCodeObjects = function()
+	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
+	if not pg then
+		_codeBox, _confirmBtn = nil, nil
+		return nil, nil
+	end
+
+	local box = resolveGuiPath(pg, {"Codes", "Codes", "CodeRedeem", "TextBox"})
+	local confirm = resolveGuiPath(pg, {"Codes", "Codes", "Confirm"})
+
+	if not (box and box:IsA("TextBox")) then
+		local codes = pg:FindFirstChild("Codes")
+		if codes then
+			local redeem = codes:FindFirstChild("CodeRedeem", true)
+			if redeem then
+				box = redeem:FindFirstChildWhichIsA("TextBox", true) or box
+			end
+			if not (confirm and confirm:IsA("GuiButton")) then
+				confirm = codes:FindFirstChild("Confirm", true)
+			end
+		end
+	end
+
+	if box and box:IsA("TextBox") then
+		_codeBox = box
+	else
+		_codeBox = nil
+	end
+
+	if confirm and confirm:IsA("GuiButton") then
+		_confirmBtn = confirm
+	else
+		_confirmBtn = nil
+	end
+
+	return _codeBox, _confirmBtn
+end
+
 local function findCodeTextBox()
 	-- Prefer Aetherion path first
 	local box = select(1, refreshCodeObjects())
