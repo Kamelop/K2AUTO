@@ -9786,104 +9786,137 @@ local function findCodeTextBox()
 	return nil
 end
 
--- Auto-submit using the same UI-event submission approach as the supplied working script.
--- It locates the Codes TextBox and the game's Submit button, then triggers the
--- button's existing UI event connections (with Activate as a normal UI fallback).
-local function fireSubmitButton()
-    local pg = LP:FindFirstChildOfClass("PlayerGui")
-    if not pg then
-        warn("[K2] PlayerGui unavailable while searching for Submit")
-        return false
-    end
+-- Auto-submit: complete traced implementation (textbox write + connection firing + focus fallback).
+local setCodeBoxText, submitCode
+local PlayerGui = LP:WaitForChild("PlayerGui")
 
-    local codesRoot = pg:FindFirstChild("Codes")
-    if not codesRoot then
-        warn("[K2] Codes UI not found. Open the Codes panel first.")
-        return false
-    end
-
-    -- Match the supplied script's hierarchy: PlayerGui.Codes.Codes.Main,
-    -- while allowing the Main container to be nested differently.
-    local codesLayer = codesRoot:FindFirstChild("Codes") or codesRoot
-    local main = codesLayer:FindFirstChild("Main") or codesLayer:FindFirstChild("Main", true) or codesLayer
-
-    local target = nil
-    local preferred = main:FindFirstChild("Submit")
-    if preferred and preferred:IsA("GuiButton") then
-        target = preferred
-    end
-
-    -- Search the Codes UI specifically, prioritizing an Instance named Submit.
-    if not target then
-        for _, obj in ipairs(codesRoot:GetDescendants()) do
-            if obj.Name:lower() == "submit" and obj:IsA("GuiButton") then
-                target = obj
-                break
-            end
+do
+    local function findCodeBox()
+        local codes = PlayerGui:FindFirstChild("Codes")
+        if not codes then return nil end
+        local main = (codes:FindFirstChild("Codes") or codes):FindFirstChild("Main")
+        local box = main and main:FindFirstChild("TextBox")
+        if box and box:IsA("TextBox") then return box end
+        for _, d in ipairs(codes:GetDescendants()) do
+            if d:IsA("TextBox") then return d end
         end
     end
 
-    -- Some interfaces name the button differently but display Submit on it.
-    if not target then
-        for _, obj in ipairs(codesRoot:GetDescendants()) do
-            if obj:IsA("TextButton")
-                and tostring(obj.Text):lower():match("^%s*submit%s*$") then
-                target = obj
-                break
-            end
+    local function findConfirmButton()
+        local codes = PlayerGui:FindFirstChild("Codes")
+        if not codes then return nil end
+        local codes2 = codes:FindFirstChild("Codes") or codes
+        local confirm = (codes2:FindFirstChild("Main") or codes2):FindFirstChild("Confirm")
+        if confirm and (confirm:IsA("ImageButton") or confirm:IsA("TextButton")) then
+            return confirm
         end
-    end
-
-    if not target then
-        warn("[K2] Submit GuiButton not found under PlayerGui.Codes")
-        return false
-    end
-
-    _submitBtn = target
-
-    -- Use the same event-connection method as the supplied auto-submit code.
-    local getconns = (typeof(getconnections) == "function" and getconnections)
-        or (debug and typeof(debug.getconnections) == "function" and debug.getconnections)
-
-    local function fireSignal(signal)
-        if not getconns or not signal then return false end
-        local ok, connections = pcall(getconns, signal)
-        if not ok or type(connections) ~= "table" then return false end
-        local fired = false
-        for _, connection in ipairs(connections) do
-            if connection.Enabled ~= false then
-                local callback
-                pcall(function() callback = connection.Function end)
-                local success = false
-                if type(callback) == "function" then
-                    success = pcall(task.spawn, callback)
-                else
-                    success = pcall(function() connection:Fire() end)
+        local fallback
+        for _, d in ipairs(codes:GetDescendants()) do
+            if d:IsA("ImageButton") or d:IsA("TextButton") then
+                local n = d.Name:lower()
+                if n:find("confirm") or n:find("submit") or n:find("redeem") or n:find("enter") then
+                    return d
                 end
-                fired = fired or success
+                fallback = fallback or d
             end
         end
-        return fired
+        return fallback
     end
 
-    local clicked = false
-    pcall(function() clicked = fireSignal(target.MouseButton1Click) or clicked end)
-    pcall(function() clicked = fireSignal(target.Activated) or clicked end)
-
-    -- Standard GuiButton activation fallback if event connections are unavailable.
-    if not clicked then
-        local ok, err = pcall(function() target:Activate() end)
-        clicked = ok
-        if not ok then warn("[K2] Submit activation failed:", err) end
+    local function clearBooleans(fn, depth)
+        if not (fn and setupvalue_ and getupvalues_) then return end
+        depth = depth or 1
+        local ok, ups = pcall(getupvalues_, fn)
+        if ok and type(ups) == "table" then
+            for k, v in pairs(ups) do
+                if type(v) == "boolean" then
+                    pcall(setupvalue_, fn, k, false)
+                elseif type(v) == "function" and depth > 0 then
+                    clearBooleans(v, depth - 1)
+                end
+            end
+        end
     end
 
-    if clicked then
-        print("[K2] Auto-submitted through:", target:GetFullName())
-    else
-        warn("[K2] Submit button was found, but its UI action could not be triggered")
+    local function fireConnections(signal, ...)
+        if not getconnections_ then return false end
+        local ok, conns = pcall(getconnections_, signal)
+        if not ok or type(conns) ~= "table" or #conns == 0 then return false end
+
+        local args = table.pack(...)
+        local any = false
+        for _, c in ipairs(conns) do
+            if c.Enabled ~= false then
+                local cb
+                pcall(function() cb = c.Function end)
+                clearBooleans(cb)
+
+                local ok2
+                if cb then
+                    ok2 = pcall(task.spawn, cb, table.unpack(args, 1, args.n))
+                else
+                    ok2 = pcall(function() c:Fire(table.unpack(args, 1, args.n)) end)
+                end
+                any = any or ok2
+            end
+        end
+        return any
     end
-    return clicked
+
+    setCodeBoxText = function(text)
+        if type(text) ~= "string" or text == "" then return end
+        local box = findCodeBox()
+        if not box then return end
+        pcall(function()
+            if box.Text ~= text then box.Text = text end
+        end)
+    end
+
+    local function trySubmitViaConnections(text)
+        if not getconnections_ then return false, "no getconnections" end
+        local box = findCodeBox()
+        if not box then return false, "code box not found" end
+        pcall(function()
+            box.Text = text
+            box.Active = true
+            box.Selectable = true
+        end)
+
+        local confirm = findConfirmButton()
+        local ok = false
+        if confirm then
+            local a = fireConnections(confirm.MouseButton1Click)
+            local b = fireConnections(confirm.Activated)
+            ok = a or b or false
+        end
+        if not ok then
+            ok = fireConnections(box.FocusLost, true) or ok
+        end
+        return ok, ok and "submitted" or "no submit control"
+    end
+
+    local function trySubmitViaFocus(text)
+        local box = findCodeBox()
+        if not box then return false, "code box not found" end
+        if not pcall(function()
+            box.Text = text
+            box:CaptureFocus()
+        end) then
+            return false, "focus failed"
+        end
+        task.wait(0.1)
+        local ok = pcall(function() box:ReleaseFocus(true) end)
+        return ok, ok and "submitted" or "release failed"
+    end
+
+    submitCode = function(text)
+        local ok, msg = trySubmitViaConnections(text)
+        if ok then return true, msg end
+        if getconnections_ then return false, msg end
+        return trySubmitViaFocus(text)
+    end
 end
+
 
 -- No remote probing or direct server calls. Redemption is submitted
 -- only through the game's visible Submit button.
@@ -10095,20 +10128,20 @@ local function writeAndSubmit(code)
 	if shouldSubmit then
 		local why = (_G.AutoSubmitEnabled and "submit") or "number-end"
 		setStatus("● SUBMIT", code, "wait")
-		print("[K2] Submitting via Submit.Activated")
+		print("[K2] Submitting through Traced submitCode()")
 
 		-- Re-assert the captured code before activating the visible Submit button.
 		pcall(function() textBox.Text = code end)
 
-		local clicked = fireSubmitButton()
+		local clicked = select(1, submitCode(code))
 		pcall(function()
 			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 			GuiService.SelectedObject = nil
 		end)
 
 		if not clicked then
-			setStatus("⚠ SUBMIT FAILED", "Submit button unavailable", "err")
-			pushActivity("Could not activate Submit for " .. code, Theme.Amber)
+			setStatus("⚠ SUBMIT FAILED", "Traced submit routine failed", "err")
+			pushActivity("Traced auto-submit failed for " .. code, Theme.Amber)
 			return false
 		end
 
