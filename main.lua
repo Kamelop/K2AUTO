@@ -9756,9 +9756,18 @@ local _cachedSubmitBtn = nil
 local function clickButtonHard(btn)
 	if not btn then return false end
 	local fired = false
+	-- GuiButton:Activate is the most reliable silent click on many builds
+	pcall(function()
+		if btn:IsA("GuiButton") then
+			btn:Activate()
+			fired = true
+		end
+	end)
 	pcall(function()
 		fireSignal(btn.MouseButton1Click)
 		fireSignal(btn.Activated)
+		fireSignal(btn.MouseButton1Down)
+		fireSignal(btn.MouseButton1Up)
 		fired = true
 	end)
 	pcall(function()
@@ -9770,8 +9779,11 @@ local function clickButtonHard(btn)
 	end)
 	pcall(function()
 		local VIM = game:GetService("VirtualInputManager")
-		local pos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+		local inset = Vector2.new(0, 0)
+		pcall(function() inset = GuiService:GetGuiInset() end)
+		local pos = btn.AbsolutePosition + inset + (btn.AbsoluteSize / 2)
 		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+		task.wait()
 		VIM:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
 		fired = true
 	end)
@@ -10132,17 +10144,15 @@ local function writeAndSubmit(code)
 	if shouldSubmit then
 		local why = (_G.AutoSubmitEnabled and "submit") or "number-end"
 		setStatus("● SUBMIT", code, "wait")
-		local cur = ""
-		pcall(function() cur = tostring(textBox.Text or "") end)
-		if formatCode(cur) ~= code then
-			safeTypeIntoBox(textBox, code)
-			speedWait("submit")
-		end
-		-- Stay silent: no CaptureFocus / no keyboard. Just ensure text + fire Submit btn
+		-- Silent only: never CaptureFocus / never open mobile keyboard
 		pcall(function()
-			textBox.Text = code
 			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 			GuiService.SelectedObject = nil
+		end)
+		-- Re-paint exact code, fire Text changed listeners
+		pcall(function()
+			textBox.ClearTextOnFocus = false
+			textBox.Text = code
 		end)
 		pcall(function()
 			if getconnections then
@@ -10155,21 +10165,42 @@ local function writeAndSubmit(code)
 		end)
 		speedWait("submit")
 
+		-- 1) FocusLost(enterPressed=true) without focusing — classic Codes redeem path
+		local focusLostOk = false
+		pcall(function()
+			if getconnections then
+				local sig = textBox.FocusLost
+				for _, c in ipairs(getconnections(sig)) do
+					-- enterPressed = true
+					if c.Fire then pcall(function() c:Fire(true) end) focusLostOk = true end
+					if c.Function then pcall(c.Function, true) focusLostOk = true end
+				end
+			end
+			if typeof(firesignal) == "function" then
+				pcall(function() firesignal(textBox.FocusLost, true) end)
+				focusLostOk = true
+			end
+		end)
+
+		-- 2) Submit / Redeem button hard-click (Activate + signals + inset mouse)
 		local clicked = false
 		pcall(function() clicked = fireSubmitButton(textBox) == true end)
 		if not clicked then
-			task.wait(0.1)
+			task.wait(0.08)
 			pcall(function() clicked = fireSubmitButton(textBox) == true end)
 		end
+
+		-- 3) Remote / controller redeem
 		local remoteOk = false
 		pcall(function() remoteOk = redeemViaRF(code) == true end)
 
+		-- Keep unfocused
 		pcall(function()
 			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 			GuiService.SelectedObject = nil
 		end)
 		_lastSubmitted, _lastSubmittedAt = code, tick()
-		if clicked or remoteOk then
+		if clicked or remoteOk or focusLostOk then
 			setStatus("✓ SUBMITTED", code, "ok")
 			pushActivity("Submitted " .. code .. " (" .. why .. ")", Theme.Green)
 		else
