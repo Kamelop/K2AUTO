@@ -9786,38 +9786,65 @@ local function findCodeTextBox()
 	return nil
 end
 
--- UI-only submission: locate the game's Submit button and activate it
--- through Roblox's normal GuiButton API. No firesignal/getconnections or
--- remote discovery/invocation is used by the auto-redeem flow.
+-- UI-only submission: locate the game's actual Submit GuiButton.
+-- Search the whole PlayerGui because the Codes screen may be nested differently
+-- from the originally assumed Codes.Codes hierarchy.
 local function fireSubmitButton()
-	refreshCodeObjects()
+    refreshCodeObjects()
 
-	local target = _submitBtn
-	if not (target and target:IsA("GuiButton") and target.Parent) then
-		local pg = LP:FindFirstChildOfClass("PlayerGui")
-		local codes = pg and pg:FindFirstChild("Codes")
-		local candidate = codes and codes:FindFirstChild("Submit", true)
-		if candidate and candidate:IsA("GuiButton") then
-			target = candidate
-			_submitBtn = candidate
-		end
-	end
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if not pg then
+        warn("[K2] PlayerGui not available while searching for Submit")
+        return false
+    end
 
-	if not (target and target:IsA("GuiButton") and target.Parent) then
-		warn("[K2] Submit button not found")
-		return false
-	end
+    local target = _submitBtn
+    if not (target and target:IsA("GuiButton") and target.Parent) then
+        target = nil
+        local codesRoot = pg:FindFirstChild("Codes")
+        local roots = {}
+        if codesRoot then table.insert(roots, codesRoot) end
+        table.insert(roots, pg)
 
-	local ok, err = pcall(function()
-		target:Activate()
-	end)
-	if not ok then
-		warn("[K2] Submit button activation failed:", err)
-		return false
-	end
+        -- Pass 1: exact Instance.Name == "Submit".
+        for _, root in ipairs(roots) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj.Name == "Submit" and obj:IsA("GuiButton") and obj.Parent then
+                    target = obj
+                    break
+                end
+            end
+            if target then break end
+        end
 
-	print("[K2] Activated Submit button:", target:GetFullName())
-	return true
+        -- Pass 2: a button whose displayed text is exactly "Submit".
+        if not target then
+            for _, obj in ipairs(pg:GetDescendants()) do
+                if obj:IsA("TextButton") and obj.Parent
+                    and tostring(obj.Text):lower():match("^%s*submit%s*$") then
+                    target = obj
+                    break
+                end
+            end
+        end
+    end
+
+    if not (target and target:IsA("GuiButton") and target.Parent) then
+        warn("[K2] Could not find a GuiButton named Submit under PlayerGui. Check that the Codes panel is open.")
+        return false
+    end
+
+    _submitBtn = target
+    local ok, err = pcall(function()
+        target:Activate()
+    end)
+    if not ok then
+        warn("[K2] Submit button activation failed:", err)
+        return false
+    end
+
+    print("[K2] Activated Submit button:", target:GetFullName())
+    return true
 end
 
 -- No remote probing or direct server calls. Redemption is submitted
