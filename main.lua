@@ -9735,189 +9735,40 @@ local function findCodeTextBox()
 	return nil
 end
 
-local function fireSignal(sig)
-	if not sig then return end
-	pcall(function()
-		if getconnections then
-			for _, c in ipairs(getconnections(sig)) do
-				if c.Fire then pcall(function() c:Fire() end) end
-				if c.Function then pcall(c.Function) end
-			end
-		end
-		if firesignal then firesignal(sig) end
-	end)
-end
-
--- Aetherion-style Codes path: Codes.Codes.CodeRedeem.TextBox + Codes.Codes.Confirm
--- Submit is activated ONLY via firesignal(Confirm.Activated) — never CaptureFocus / keyboard
-local function resolveGuiPath(root, names)
-	local cur = root
-	for _, name in ipairs(names) do
-		if not cur then return nil end
-		cur = cur:FindFirstChild(name)
-	end
-	return cur
-end
-
-local _codeBox, _confirmBtn = nil, nil
-refreshCodeObjects = function()
-	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
-	if not pg then
-		_codeBox, _confirmBtn = nil, nil
-		return nil, nil
-	end
-	local box = resolveGuiPath(pg, {"Codes", "Codes", "CodeRedeem", "TextBox"})
-	local confirm = resolveGuiPath(pg, {"Codes", "Codes", "Confirm"})
-	if not (box and box:IsA("TextBox")) then
-		-- fallback: any TextBox under CodeRedeem
-		local codes = pg:FindFirstChild("Codes")
-		if codes then
-			local redeem = codes:FindFirstChild("CodeRedeem", true)
-			if redeem then
-				box = redeem:FindFirstChildWhichIsA("TextBox", true) or box
-			end
-			if not (confirm and confirm:IsA("GuiButton")) then
-				confirm = codes:FindFirstChild("Confirm", true)
-			end
-		end
-	end
-	if box and box:IsA("TextBox") then _codeBox = box else _codeBox = nil end
-	if confirm and confirm:IsA("GuiButton") then _confirmBtn = confirm else _confirmBtn = nil end
-	return _codeBox, _confirmBtn
-end
-
-local function isSubmitButton(obj)
-	if not obj then return false end
-	if not (obj:IsA("TextButton") or obj:IsA("ImageButton") or obj:IsA("GuiButton")) then return false end
-	if ScreenGui and obj:IsDescendantOf(ScreenGui) then return false end
-	if obj.Name == "Confirm" then return true end
-	local tip = (((obj:IsA("TextButton") and tostring(obj.Text or "")) or "") .. " " .. tostring(obj.Name or "")):lower()
-	if tip:find("cancel", 1, true) or tip:find("close", 1, true) then return false end
-	return tip:find("submit", 1, true) or tip:find("redeem", 1, true)
-		or tip:find("confirm", 1, true) or obj.Name == "Submit" or obj.Name == "Redeem"
-end
-
-local function fireSubmitButton(nearObj)
-	-- Prefer exact Aetherion path: Codes.Codes.Confirm
+-- UI-only submission: locate the game's Confirm button and activate it
+-- through Roblox's normal GuiButton API. No firesignal/getconnections or
+-- remote discovery/invocation is used by the auto-redeem flow.
+local function fireSubmitButton()
 	refreshCodeObjects()
+
 	local target = _confirmBtn
-	if not target or not target.Parent then
-		-- fallback search
-		local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
+	if not (target and target:IsA("GuiButton") and target.Parent) then
+		local pg = LP:FindFirstChildOfClass("PlayerGui")
 		local codes = pg and pg:FindFirstChild("Codes")
-		if codes then
-			target = codes:FindFirstChild("Confirm", true)
-			if not (target and target:IsA("GuiButton")) then
-				for _, d in ipairs(codes:GetDescendants()) do
-					if isSubmitButton(d) then target = d break end
-				end
-			end
+		local candidate = codes and codes:FindFirstChild("Confirm", true)
+		if candidate and candidate:IsA("GuiButton") then
+			target = candidate
 		end
 	end
-	if not target then
-		warn("[K2] Confirm/Submit button not found")
+
+	if not (target and target:IsA("GuiButton") and target.Parent) then
+		warn("[K2] Confirm button not found")
 		return false
 	end
-	print("[K2] Confirm btn →", target:GetFullName())
-	-- Aetherion exact: firesignal(confirm.Activated)
-	local ok = false
-	if typeof(firesignal) == "function" then
-		ok = pcall(firesignal, target.Activated)
-		pcall(firesignal, target.MouseButton1Click)
-	end
-	pcall(function()
-		if getconnections then
-			for _, sigName in ipairs({ "Activated", "MouseButton1Click" }) do
-				local sig = target[sigName]
-				if typeof(sig) == "RBXScriptSignal" then
-					for _, c in ipairs(getconnections(sig)) do
-						pcall(function()
-							if c.Fire then c:Fire() end
-							if c.Function then c.Function() end
-						end)
-					end
-				end
-			end
-		end
-	end)
-	pcall(function()
-		if target:IsA("GuiButton") then target:Activate() end
-	end)
-	return ok or true
-end
 
-local _rfRemote = nil
-local function redeemViaRF(code)
-	code = formatCode(code)
-	if code == "" then return false end
-	local function tryInvoke(rf)
-		if not rf then return false end
-		if rf:IsA("RemoteFunction") then
-			local a = pcall(function() rf:InvokeServer(code) end)
-			local b = pcall(function() rf:InvokeServer({ Code = code }) end)
-			local c = pcall(function() rf:InvokeServer({ code = code, Code = code }) end)
-			return a or b or c
-		elseif rf:IsA("RemoteEvent") then
-			local a = pcall(function() rf:FireServer(code) end)
-			local b = pcall(function() rf:FireServer({ Code = code }) end)
-			return a or b
-		end
+	local ok, err = pcall(function()
+		target:Activate()
+	end)
+	if not ok then
+		warn("[K2] Confirm activation failed:", err)
 		return false
 	end
-	if _rfRemote and _rfRemote.Parent and tryInvoke(_rfRemote) then
-		return true
-	end
-	_rfRemote = nil
 
-	-- Prefer CodesController / CodeController module API if present
-	local rs = game:GetService("ReplicatedStorage")
-	local controllers = rs:FindFirstChild("Controllers")
-	if controllers then
-		for _, name in ipairs({ "CodesController", "CodeController", "RedeemController", "PromoController" }) do
-			local modScript = controllers:FindFirstChild(name, true)
-			if modScript and modScript:IsA("ModuleScript") then
-				local ok, mod = pcall(require, modScript)
-				if ok and type(mod) == "table" then
-					for _, fnName in ipairs({ "Redeem", "RedeemCode", "SubmitCode", "ClaimCode", "UseCode" }) do
-						local fn = mod[fnName]
-						if type(fn) == "function" then
-							local okCall = pcall(function() fn(mod, code) end)
-							if not okCall then okCall = pcall(function() fn(code) end) end
-							if okCall then
-								print("[K2] Redeem via", name .. "." .. fnName)
-								return true
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	local packages = rs:FindFirstChild("Packages")
-	local net = packages and packages:FindFirstChild("Net")
-	local candidates = {}
-	if net then
-		for _, r in ipairs(net:GetDescendants()) do
-			if r:IsA("RemoteFunction") or r:IsA("RemoteEvent") then
-				local n = r.Name:lower()
-				if n:find("code", 1, true) or n:find("redeem", 1, true)
-					or n:find("promo", 1, true) or n:find("coupon", 1, true) then
-					table.insert(candidates, r)
-				end
-			end
-		end
-	end
-	for _, r in ipairs(candidates) do
-		if tryInvoke(r) then
-			_rfRemote = r
-			print("[K2] Redeem remote →", r:GetFullName())
-			return true
-		end
-	end
-	return false
+	return true
 end
 
+-- No remote probing or direct server calls. Redemption is submitted
+-- only through the game's visible Confirm button.
 local function updateCounters()
 	local t = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
 	if QueueLabel then QueueLabel.Text = tostring(#pendingQueue) end
@@ -9952,15 +9803,6 @@ local function paintTextBox(textBox, fullText)
 		textBox.TextEditable = true
 		if textBox.TextTransparency ~= nil then textBox.TextTransparency = 0 end
 		textBox.Text = fullText
-	end)
-	pcall(function()
-		if getconnections then
-			local sig = textBox:GetPropertyChangedSignal("Text")
-			for _, c in ipairs(getconnections(sig)) do
-				if c.Fire then pcall(function() c:Fire() end)
-				elseif c.Function then pcall(c.Function) end
-			end
-		end
 	end)
 	local got = ""
 	pcall(function() got = tostring(textBox.Text or "") end)
@@ -10088,7 +9930,7 @@ local function writeAndSubmit(code)
 
 	setStatus("● WRITE", code, "wait")
 
-	-- Resolve Codes.Codes.CodeRedeem.TextBox (Aetherion path)
+	-- Resolve the game's Codes TextBox
 	local textBox = select(1, refreshCodeObjects()) or findCodeTextBox()
 	if not textBox then
 		pcall(ensureCodesOpen)
@@ -10101,7 +9943,7 @@ local function writeAndSubmit(code)
 		return false
 	end
 
-	-- Silent write: set Text only (no CaptureFocus / no keyboard) — Aetherion style
+	-- Write the captured code into the game's Codes TextBox
 	pcall(function()
 		if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 		GuiService.SelectedObject = nil
@@ -10137,33 +9979,20 @@ local function writeAndSubmit(code)
 		setStatus("● SUBMIT", code, "wait")
 		print("[K2] Submitting via Confirm.Activated")
 
-		-- Wait briefly for Confirm connections if needed (Aetherion readiness)
-		refreshCodeObjects()
-		local confirm = _confirmBtn
-		if confirm and typeof(getconnections) == "function" then
-			local n = 0
-			pcall(function() n = #getconnections(confirm.Activated) end)
-			if n == 0 then
-				task.wait(0.1)
-				refreshCodeObjects()
-				confirm = _confirmBtn
-			end
-		end
-
-		-- Re-assert text right before activate
+		-- Re-assert the captured code before activating the visible Confirm button.
 		pcall(function() textBox.Text = code end)
 
-		-- EXACT Aetherion auto-submit: firesignal(confirm.Activated)
-		local clicked = false
-		pcall(function() clicked = fireSubmitButton(textBox) == true end)
-
-		-- Optional remote fallback (non-breaking)
-		pcall(function() redeemViaRF(code) end)
-
+		local clicked = fireSubmitButton()
 		pcall(function()
 			if textBox:IsFocused() then textBox:ReleaseFocus(false) end
 			GuiService.SelectedObject = nil
 		end)
+
+		if not clicked then
+			setStatus("⚠ SUBMIT FAILED", "Confirm button unavailable", "err")
+			pushActivity("Could not activate Confirm for " .. code, Theme.Amber)
+			return false
+		end
 
 		_lastSubmitted, _lastSubmittedAt = code, tick()
 		setStatus("✓ SUBMITTED", code, "ok")
