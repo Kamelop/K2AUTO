@@ -9668,18 +9668,18 @@ local function resolveGuiPath(root, names)
 	return cur
 end
 
-local _codeBox, _confirmBtn = nil, nil
+local _codeBox, _submitBtn = nil, nil
 
 -- Refresh references because the game's Codes UI may be recreated.
 refreshCodeObjects = function()
 	local pg = LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")
 	if not pg then
-		_codeBox, _confirmBtn = nil, nil
+		_codeBox, _submitBtn = nil, nil
 		return nil, nil
 	end
 
 	local box = resolveGuiPath(pg, {"Codes", "Codes", "CodeRedeem", "TextBox"})
-	local confirm = resolveGuiPath(pg, {"Codes", "Codes", "Confirm"})
+	local submit = resolveGuiPath(pg, {"Codes", "Codes", "Submit"})
 
 	if not (box and box:IsA("TextBox")) then
 		local codes = pg:FindFirstChild("Codes")
@@ -9688,8 +9688,8 @@ refreshCodeObjects = function()
 			if redeem then
 				box = redeem:FindFirstChildWhichIsA("TextBox", true) or box
 			end
-			if not (confirm and confirm:IsA("GuiButton")) then
-				confirm = codes:FindFirstChild("Confirm", true)
+			if not (submit and submit:IsA("GuiButton")) then
+				submit = codes:FindFirstChild("Submit", true)			
 			end
 		end
 	end
@@ -9700,13 +9700,13 @@ refreshCodeObjects = function()
 		_codeBox = nil
 	end
 
-	if confirm and confirm:IsA("GuiButton") then
-		_confirmBtn = confirm
+	if submit and submit:IsA("GuiButton") then
+		_submitBtn = submit
 	else
-		_confirmBtn = nil
+		_submitBtn = nil
 	end
 
-	return _codeBox, _confirmBtn
+	return _codeBox, _submitBtn
 end
 
 local function findCodeTextBox()
@@ -9786,24 +9786,25 @@ local function findCodeTextBox()
 	return nil
 end
 
--- UI-only submission: locate the game's Confirm button and activate it
+-- UI-only submission: locate the game's Submit button and activate it
 -- through Roblox's normal GuiButton API. No firesignal/getconnections or
 -- remote discovery/invocation is used by the auto-redeem flow.
 local function fireSubmitButton()
 	refreshCodeObjects()
 
-	local target = _confirmBtn
+	local target = _submitBtn
 	if not (target and target:IsA("GuiButton") and target.Parent) then
 		local pg = LP:FindFirstChildOfClass("PlayerGui")
 		local codes = pg and pg:FindFirstChild("Codes")
-		local candidate = codes and codes:FindFirstChild("Confirm", true)
+		local candidate = codes and codes:FindFirstChild("Submit", true)
 		if candidate and candidate:IsA("GuiButton") then
 			target = candidate
+			_submitBtn = candidate
 		end
 	end
 
 	if not (target and target:IsA("GuiButton") and target.Parent) then
-		warn("[K2] Confirm button not found")
+		warn("[K2] Submit button not found")
 		return false
 	end
 
@@ -9811,15 +9812,16 @@ local function fireSubmitButton()
 		target:Activate()
 	end)
 	if not ok then
-		warn("[K2] Confirm activation failed:", err)
+		warn("[K2] Submit button activation failed:", err)
 		return false
 	end
 
+	print("[K2] Activated Submit button:", target:GetFullName())
 	return true
 end
 
 -- No remote probing or direct server calls. Redemption is submitted
--- only through the game's visible Confirm button.
+-- only through the game's visible Submit button.
 local function updateCounters()
 	local t = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
 	if QueueLabel then QueueLabel.Text = tostring(#pendingQueue) end
@@ -10028,9 +10030,9 @@ local function writeAndSubmit(code)
 	if shouldSubmit then
 		local why = (_G.AutoSubmitEnabled and "submit") or "number-end"
 		setStatus("● SUBMIT", code, "wait")
-		print("[K2] Submitting via Confirm.Activated")
+		print("[K2] Submitting via Submit.Activated")
 
-		-- Re-assert the captured code before activating the visible Confirm button.
+		-- Re-assert the captured code before activating the visible Submit button.
 		pcall(function() textBox.Text = code end)
 
 		local clicked = fireSubmitButton()
@@ -10040,8 +10042,8 @@ local function writeAndSubmit(code)
 		end)
 
 		if not clicked then
-			setStatus("⚠ SUBMIT FAILED", "Confirm button unavailable", "err")
-			pushActivity("Could not activate Confirm for " .. code, Theme.Amber)
+			setStatus("⚠ SUBMIT FAILED", "Submit button unavailable", "err")
+			pushActivity("Could not activate Submit for " .. code, Theme.Amber)
 			return false
 		end
 
