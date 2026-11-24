@@ -1,9 +1,10 @@
 --[[
   K2 CODE SNIPER V2 — notifier + capture
-  - "code" / "code is" / "use code" / "riddle is" = NOTIFIER only (never types that line)
-  - Actual code/riddle is taken from the NEXT message after arm
-  - Reset Input clears queue + collected + arm
-  - Sammy filter in Settings
+  VMForge-ready (https://vmforgemain.lovable.app/)
+  - Pure Luau, no goto, scope-local heavy, globals only for Roblox/executor APIs
+  - Zero freeze: no full PlayerGui/workspace scans on hot paths, no particle spam
+  - "code" / "code is" / "use code" / "riddle is" = NOTIFIER only
+  - Actual code/riddle from NEXT message after arm
 ]]
 
 repeat task.wait() until game:IsLoaded()
@@ -9037,4 +9038,5376 @@ local function liveScrapeModule(mod, depth, path, hintEvent)
 	local eventHint = hintEvent
 	if not eventHint then
 		if pathL:find("halloween", 1, true) then eventHint = "Halloween"
-		elseif pathL:find("christmas", 1, true) or pathL:find("xmas", 1, true) then e
+		elseif pathL:find("christmas", 1, true) or pathL:find("xmas", 1, true) then eventHint = "Christmas"
+		elseif pathL:find("easter", 1, true) then eventHint = "Easter"
+		elseif pathL:find("valentine", 1, true) then eventHint = "Valentines"
+		elseif pathL:find("admin", 1, true) then eventHint = "AdminAbuse"
+		elseif pathL:find("fuse", 1, true) then eventHint = "Fuse"
+		elseif pathL:find("dlc", 1, true) then eventHint = "DLC"
+		end
+	end
+	-- Direct brainrot-looking fields
+	if mod.Name or mod.name or mod.DisplayName or mod.displayName then
+		liveRegister(mod)
+	end
+	liveTryRegisterLoose(mod, eventHint)
+	if depth >= 5 then return end
+	for k, v in pairs(mod) do
+		if type(v) == "table" then
+			local subPath = tostring(path) .. "/" .. tostring(k)
+			local subHint = eventHint
+			local kl = tostring(k):lower()
+			if kl:find("halloween", 1, true) then subHint = "Halloween"
+			elseif kl:find("event", 1, true) and type(k) == "string" and #k < 40 then
+				subHint = subHint or k
+			end
+			if liveNameHints(k) or liveNameHints(subPath) or subHint then
+				pcall(liveScrapeModule, v, depth + 1, subPath, subHint)
+			elseif depth < 3 then
+				pcall(liveScrapeModule, v, depth + 1, subPath, subHint)
+			end
+		end
+	end
+end
+
+local function liveTryRequire(inst, path)
+	if not inst or not inst:IsA("ModuleScript") then return end
+	local ok, mod = pcall(require, inst)
+	if not ok or type(mod) ~= "table" then return end
+	LIVE.sources[#LIVE.sources + 1] = path or inst:GetFullName()
+	pcall(liveScrapeModule, mod, 0, path or inst.Name, nil)
+end
+
+local function liveScanFolder(folder, depth)
+	depth = depth or 0
+	if not folder or depth > 8 then return end
+	for _, child in ipairs(folder:GetChildren()) do
+		local name = child.Name
+		if child:IsA("ModuleScript") and (liveNameHints(name) or depth <= 2) then
+			liveTryRequire(child, child:GetFullName())
+		elseif child:IsA("Folder") or child:IsA("Configuration") then
+			if liveNameHints(name) or depth <= 1 then
+				liveScanFolder(child, depth + 1)
+			elseif depth < 3 then
+				liveScanFolder(child, depth + 1)
+			end
+		elseif child:IsA("StringValue") or child:IsA("StringValue") then
+			-- skip
+		end
+	end
+end
+
+local function liveScanGame()
+	local roots = {}
+	pcall(function() roots[#roots + 1] = game:GetService("ReplicatedStorage") end)
+	pcall(function() roots[#roots + 1] = game:GetService("ReplicatedFirst") end)
+	pcall(function()
+		local ps = game:GetService("Players")
+		local lp = ps.LocalPlayer
+		if lp then roots[#roots + 1] = lp:FindFirstChild("PlayerScripts") end
+	end)
+	for _, root in ipairs(roots) do
+		if root then
+			pcall(liveScanFolder, root, 0)
+			-- also deep search for well-known module names
+			pcall(function()
+				for _, d in ipairs(root:GetDescendants()) do
+					if d:IsA("ModuleScript") and liveNameHints(d.Name) then
+						liveTryRequire(d, d:GetFullName())
+					end
+				end
+			end)
+		end
+	end
+	-- Workspace plot attributes sometimes hold display names only — light pass
+	pcall(function()
+		local plots = workspace:FindFirstChild("Plots")
+		if not plots then return end
+		for _, plot in ipairs(plots:GetChildren()) do
+			local pods = plot:FindFirstChild("AnimalPodiums") or plot:FindFirstChild("Podiums")
+			if pods then
+				for _, pod in ipairs(pods:GetChildren()) do
+					local nm = pod:GetAttribute("Animal") or pod:GetAttribute("Brainrot")
+						or pod:GetAttribute("Name") or pod:GetAttribute("DisplayName")
+					local ev = pod:GetAttribute("Event") or pod:GetAttribute("Origin")
+					if nm then liveRegister({ name = tostring(nm), event = ev and tostring(ev) or nil }) end
+				end
+			end
+		end
+	end)
+	LIVE.ready = true
+	pcall(function()
+		print(string.format("[K2 Riddler] LIVE brainrot scan: %d entries from %d sources", LIVE.scanned, #LIVE.sources))
+	end)
+end
+
+task.spawn(function()
+	pcall(liveScanGame)
+	-- re-scan later in case modules replicate late
+	task.wait(4)
+	pcall(liveScanGame)
+	task.wait(10)
+	pcall(liveScanGame)
+end)
+
+local function liveFindBrainrot(query)
+	if not query or query == "" then return nil end
+	local q = liveKey(query)
+	if LIVE.brainrots[q] then return LIVE.brainrots[q] end
+	-- fuzzy contains
+	local best, bestScore = nil, 0
+	for k, entry in pairs(LIVE.brainrots) do
+		if k == q then return entry end
+		if #q >= 4 and (k:find(q, 1, true) or q:find(k, 1, true)) then
+			local score = #k
+			if score > bestScore then best, bestScore = entry, score end
+		end
+	end
+	return best
+end
+
+local function liveAnswer(text)
+	if not text or text == "" then return nil end
+	local low = tostring(text):lower():gsub("[%?%.%,!]", ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	if low == "" then return nil end
+
+	-- "what event ... <brainrot>" / "what update did X come from"
+	if low:find("event", 1, true) or low:find("update", 1, true) or low:find("come from", 1, true)
+		or low:find("came from", 1, true) or low:find("released", 1, true) or low:find("origin", 1, true) then
+		-- extract candidate name: last words / after "of" / "did"
+		local cand = low:match("event%s+did%s+(.+)$")
+			or low:match("event%s+was%s+(.+)$")
+			or low:match("event%s+(.+)%s+in$")
+			or low:match("update%s+did%s+(.+)$")
+			or low:match("come from%s+(.+)$")
+			or low:match("came from%s+(.+)$")
+			or low:match("of%s+(.+)$")
+			or low:match("for%s+(.+)$")
+		if cand then
+			cand = cand:gsub("%s+come.*$", ""):gsub("%s+in$", ""):gsub("%s+from$", "")
+				:gsub("^the%s+", ""):gsub("%s+trait.*$", ""):gsub("%s+brainrot.*$", "")
+			local entry = liveFindBrainrot(cand)
+			if entry and entry.event then
+				return tostring(entry.event):upper():gsub("%s+", "")
+			end
+			if entry and entry.origin then
+				return tostring(entry.origin):upper():gsub("%s+", "")
+			end
+		end
+		-- reverse: try any brainrot name appearing in the question
+		for k, entry in pairs(LIVE.brainrots) do
+			if #k >= 4 and low:find(k, 1, true) and entry.event then
+				return tostring(entry.event):upper():gsub("%s+", "")
+			end
+		end
+	end
+
+	-- "what trait ... event" / trait source
+	if low:find("trait", 1, true) then
+		for traitKey, list in pairs(LIVE.byTrait) do
+			if low:find(traitKey, 1, true) then
+				-- if asking event of trait, try first brainrot's event
+				if low:find("event", 1, true) then
+					for _, nm in ipairs(list) do
+						local e = liveFindBrainrot(nm)
+						if e and e.event then return tostring(e.event):upper():gsub("%s+", "") end
+					end
+				end
+			end
+		end
+	end
+
+	-- "brainrots from/in <event>" → first / best known (single token preference for codes)
+	local eventCand = low:match("from%s+the%s+(.+)$") or low:match("from%s+(.+)$")
+		or low:match("in%s+the%s+(.+)%s+update") or low:match("in%s+(.+)%s+update")
+		or low:match("in%s+the%s+(.+)$")
+	if eventCand and (low:find("brainrot", 1, true) or low:find("animal", 1, true) or low:find("best", 1, true) or low:find("reskin", 1, true)) then
+		eventCand = eventCand:gsub("%s+update.*$", ""):gsub("%s+event.*$", ""):gsub("^the%s+", "")
+		local list = LIVE.byEvent[liveKey(eventCand)]
+		if list and list[1] then
+			return tostring(list[1]):upper():gsub("%s+", "")
+		end
+		-- partial event key match
+		local ek = liveKey(eventCand)
+		for key, lst in pairs(LIVE.byEvent) do
+			if key:find(ek, 1, true) or ek:find(key, 1, true) then
+				if lst[1] then return tostring(lst[1]):upper():gsub("%s+", "") end
+			end
+		end
+	end
+
+	-- direct "what is <brainrot> event"
+	local entry = liveFindBrainrot(low)
+	if entry and entry.event and (low:find("event", 1, true) or low:find("from", 1, true)) then
+		return tostring(entry.event):upper():gsub("%s+", "")
+	end
+
+	return nil
+end
+
+local function liveKnowledgeBlurb(maxChars)
+	maxChars = maxChars or 3500
+	local parts = {}
+	parts[#parts + 1] = "LIVE_GAME_BRAINROTS:"
+	local n = 0
+	for _, entry in pairs(LIVE.brainrots) do
+		n = n + 1
+		if n > 180 then
+			parts[#parts + 1] = "...(truncated)"
+			break
+		end
+		local line = entry.display
+		if entry.event then line = line .. " event=" .. tostring(entry.event) end
+		if entry.rarity then line = line .. " rarity=" .. tostring(entry.rarity) end
+		if entry.gen then line = line .. " gen=" .. tostring(entry.gen) end
+		local tkeys = {}
+		for _, tr in pairs(entry.traits) do tkeys[#tkeys + 1] = tr end
+		if #tkeys > 0 then line = line .. " traits=" .. table.concat(tkeys, "|") end
+		parts[#parts + 1] = line
+	end
+	parts[#parts + 1] = "LIVE_EVENTS:"
+	for ek, list in pairs(LIVE.byEvent) do
+		parts[#parts + 1] = ek .. " => " .. table.concat(list, ", ")
+	end
+	local blob = table.concat(parts, "\n")
+	if #blob > maxChars then blob = blob:sub(1, maxChars) .. "\n...(truncated)" end
+	return blob
+end
+
+function localExactAnswer(text)
+	-- Prefer live game data for event/trait/origin style questions
+	local live = liveAnswer(text)
+	if live and live ~= "" then return live end
+	local clean, raw = cleanQuestion(text)
+	if not clean then return nil end
+	if type(SAB_MULTI) == "table" then
+		if SAB_MULTI[clean] then return SAB_MULTI[clean][1] end
+		if SAB_MULTI[raw] then return SAB_MULTI[raw][1] end
+	end
+	if type(SAB_DB) == "table" then
+		if SAB_DB[clean] then return SAB_DB[clean] end
+		if SAB_DB[raw] then return SAB_DB[raw] end
+		local low = tostring(text or ""):lower():gsub("[%?%.%,!]",""):gsub("%s+"," "):gsub("^%s+",""):gsub("%s+$","")
+		if SAB_DB[low] then return SAB_DB[low] end
+	end
+	-- Headless offline lore
+	if type(HEADLESS_LORE) == "table" then
+		if HEADLESS_LORE[clean] then return HEADLESS_LORE[clean] end
+		if HEADLESS_LORE[raw] then return HEADLESS_LORE[raw] end
+		local low = tostring(text or ""):lower():gsub("[%?%.%,!]",""):gsub("%s+"," "):gsub("^%s+",""):gsub("%s+$","")
+		if HEADLESS_LORE[low] then return HEADLESS_LORE[low] end
+		-- partial key match (longest)
+		local bestK, bestV = nil, nil
+		for k, v in pairs(HEADLESS_LORE) do
+			if low:find(k, 1, true) and (not bestK or #k > #bestK) then
+				bestK, bestV = k, v
+			end
+		end
+		if bestV then return bestV end
+	end
+	return nil
+end
+
+local function localExactAnswers(text)
+	local clean, raw = cleanQuestion(text)
+	if not clean then return nil end
+	if type(SAB_MULTI) == "table" then
+		local multi = SAB_MULTI[clean] or SAB_MULTI[raw]
+		if multi then
+			local out = {}
+			for _, v in ipairs(multi) do out[#out+1] = v end
+			return out
+		end
+	end
+	local single = localExactAnswer(text)
+	if single then return { single } end
+	return nil
+end
+
+local aiSolveRiddle
+local aiSolveRiddleMulti
+do
+    local function resolvePart(part, cb)
+        local multiplier = extractTimesMultiplier(part)
+        local q = stripMultiplierText(part)
+        q = stripTrailingNumber(q)
+        q = q:gsub("%s+at%s+the%s+end%s*$", ""):gsub("%s+at%s+the%s+start%s*$", "")
+        q = trim(q)
+        if q == "" then return nil end
+        local onlyNum = q:match("^%d+$")
+        if onlyNum then return multiplier and string.rep(onlyNum, multiplier) or onlyNum end
+
+        local a
+        if CONFIG.UseLocalFirst then a = localExactAnswer(q) end
+        if not a then
+            if CONFIG.RiddleToken and CONFIG.RiddleToken ~= "" then
+                if cb then cb("REMOTE: " .. q:sub(1, 40)) end
+                a = remoteSolve(q)
+            end
+        end
+        if not a then
+            if cb then cb("AI: " .. q:sub(1, 40)) end
+            a = select(1, queryAI(q))
+        end
+        if not a then return nil end
+        local clean = tostring(a):upper():gsub("%s+", ""):gsub("[%?%.%,!\"'`]", "")
+        if clean:find("ATTHEEND") or clean:find("ATTHESTART") or clean == "AND" then return nil end
+        if clean == "" then return nil end
+        return multiplier and string.rep(clean, multiplier) or clean
+    end
+
+    aiSolveRiddle = function(text, cb)
+        local suffix = text:match("%s*(%d+)%s*$") or text:match("%s*(%d+)[%.,;!?]%s*$")
+        local parts = splitAllParts(text)
+        local answers = {}
+        for _, part in ipairs(parts) do
+            local ok, result = pcall(resolvePart, part, cb)
+            if ok and result and result ~= "" then answers[#answers+1] = result end
+        end
+        if #answers == 0 then
+            if cb then cb("AI full question") end
+            local a = select(1, queryAI(stripTrailingNumber(text)))
+            if a then
+                local clean = tostring(a):upper():gsub("%s+", ""):gsub("[%?%.%,!\"'`]", "")
+                clean = clean:gsub("ATTHEEND", ""):gsub("ATTHESTART", "")
+                if suffix and clean:sub(-#suffix) ~= suffix then clean = clean .. suffix end
+                return clean
+            end
+            return nil, "no answer"
+        end
+        local out = table.concat(answers, "")
+        if suffix and out:sub(-#suffix) ~= suffix then out = out .. suffix end
+        return out
+    end
+
+    local function resolvePartMulti(part, cb)
+        local multiplier = extractTimesMultiplier(part)
+        local q = stripMultiplierText(part)
+        q = stripTrailingNumber(q)
+        q = q:gsub("%s+at%s+the%s+end%s*$", ""):gsub("%s+at%s+the%s+start%s*$", "")
+        q = trim(q)
+        if q == "" then return nil end
+        local onlyNum = q:match("^%d+$")
+        if onlyNum then
+            local v = multiplier and string.rep(onlyNum, multiplier) or onlyNum
+            return { v }
+        end
+
+        local out = {}
+        local candidates = CONFIG.UseLocalFirst and localExactAnswers(q) or nil
+        if candidates then
+            for _, a in ipairs(candidates) do
+                local clean = tostring(a):upper():gsub("%s+", ""):gsub("[%?%.%,!\"'`]", "")
+                if clean ~= "" and not clean:find("ATTHEEND") and not clean:find("ATTHESTART") and clean ~= "AND" then
+                    out[#out+1] = multiplier and string.rep(clean, multiplier) or clean
+                end
+            end
+        end
+
+        if #out == 0 and CONFIG.RiddleToken and CONFIG.RiddleToken ~= "" then
+            if cb then cb("REMOTE: " .. q:sub(1, 40)) end
+            local r = remoteSolve(q)
+            if r then out[#out+1] = multiplier and string.rep(r, multiplier) or r end
+        end
+
+        if #out == 0 then
+            if cb then cb("AI: " .. q:sub(1, 40)) end
+            local a = select(1, queryAI(q))
+            if a then
+                local clean = tostring(a):upper():gsub("%s+", ""):gsub("[%?%.%,!\"'`]", "")
+                if clean ~= "" and not clean:find("ATTHEEND") and not clean:find("ATTHESTART") then
+                    out[#out+1] = multiplier and string.rep(clean, multiplier) or clean
+                end
+            end
+        end
+
+        if #out == 0 then return nil end
+        return out
+    end
+
+    aiSolveRiddleMulti = function(text, cb)
+        local suffix = text:match("%s*(%d+)%s*$") or text:match("%s*(%d+)[%.,;!?]%s*$")
+        local parts = splitAllParts(text)
+        local partLists = {}
+        for _, part in ipairs(parts) do
+            local ok, result = pcall(resolvePartMulti, part, cb)
+            if ok and result and #result > 0 then partLists[#partLists+1] = result end
+        end
+        if #partLists == 0 then
+            if cb then cb("AI full question") end
+            local a = select(1, queryAI(stripTrailingNumber(text)))
+            if a then
+                local clean = tostring(a):upper():gsub("%s+", ""):gsub("[%?%.%,!\"'`]", "")
+                clean = clean:gsub("ATTHEEND", ""):gsub("ATTHESTART", "")
+                if suffix and clean:sub(-#suffix) ~= suffix then clean = clean .. suffix end
+                return { clean }
+            end
+            return nil, "no answer"
+        end
+        local combos = { "" }
+        for _, list in ipairs(partLists) do
+            local newCombos = {}
+            for _, prefix in ipairs(combos) do
+                for _, ans in ipairs(list) do
+                    newCombos[#newCombos+1] = prefix .. ans
+                end
+            end
+            combos = newCombos
+            if #combos > 12 then
+                local trimmed = {}
+                for i = 1, 12 do trimmed[i] = combos[i] end
+                combos = trimmed
+            end
+        end
+        local seen, out = {}, {}
+        for _, c in ipairs(combos) do
+            if suffix and c:sub(-#suffix) ~= suffix then c = c .. suffix end
+            if not seen[c] then seen[c] = true; out[#out+1] = c end
+        end
+        return out
+    end
+end
+
+
+
+
+local function parseAIAnswer(text)
+	if type(text) ~= "string" then return nil end
+	text = text:gsub("^%s+", ""):gsub("%s+$", "")
+	local compact = text:gsub("%s+", ""):gsub("[^%w%_%-]", ""):upper()
+	if #compact >= 1 then return compact end
+	return nil
+end
+
+
+local function tryRethinkInvalid(failedCode)
+	if _G.RethinkInvalid == false then return end
+	local q = _lastRiddleQ
+	if not q or q == "" then return end
+	local tries = _rethinkTried[q] or 0
+	local maxT = math.clamp(tonumber(_G.RethinkMax) or 2, 1, 5)
+	if tries >= maxT then return end
+	_rethinkTried[q] = tries + 1
+	local reject = tostring(failedCode or _lastRiddleA or ""):upper()
+	local prompt = tostring(q) .. "\nREJECT:" .. reject .. "\nGive a different valid uppercase token only."
+	pcall(function()
+		if type(pushActivity) == "function" then pushActivity("RETHINK #" .. tostring(tries + 1), Theme.Amber) end
+	end)
+	task.spawn(function()
+		local ans = nil
+		if type(queryAI) == "function" then
+			local ok, a = pcall(queryAI, prompt)
+			if ok then ans = a end
+		end
+		if ans and type(ans) == "string" and #ans > 0 then
+			ans = ans:upper():gsub("%s+", ""):gsub("[^%w]", "")
+			if ans ~= "" and ans ~= reject and type(queueCode) == "function" then
+				_lastRiddleA = ans
+				queueCode(ans, "Rethink")
+			end
+		end
+	end)
+end
+
+local function solveAIRiddle(riddleText, cb)
+	riddleText = tostring(riddleText or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if riddleText == "" then
+		if cb then cb(nil, "empty riddle") end
+		return
+	end
+	if _aiBusy then
+		if cb then cb(nil, "busy") end
+		return
+	end
+	_aiBusy = true
+	task.spawn(function()
+		local ans, err = nil, nil
+		local ok, result = pcall(function()
+			if type(aiSolveRiddle) == "function" then
+				return aiSolveRiddle(riddleText, function(msg)
+					-- optional progress into activity if available later
+				end)
+			end
+			return nil
+		end)
+		_aiBusy = false
+		if not ok then
+			if cb then cb(nil, tostring(result)) end
+			return
+		end
+		ans = result
+		if type(ans) == "string" then
+			ans = parseAIAnswer(ans) or ans:upper():gsub("%s+", "")
+		elseif type(ans) == "table" and ans[1] then
+			ans = parseAIAnswer(tostring(ans[1])) or tostring(ans[1]):upper():gsub("%s+", "")
+		else
+			ans = nil
+		end
+		if ans and ans ~= "" then
+			if cb then cb(ans, nil) end
+		else
+			if cb then cb(nil, err or "no answer") end
+		end
+	end)
+end
+
+
+local function isGuiVisible(obj)
+	if not obj then return false end
+	if obj:IsA("GuiObject") and not obj.Visible then return false end
+	local c = obj.Parent
+	while c do
+		if c:IsA("GuiObject") and not c.Visible then return false end
+		if c:IsA("ScreenGui") and not c.Enabled then return false end
+		c = c.Parent
+	end
+	return true
+end
+
+local function formatCode(code)
+	return string.upper(tostring(code or ""):gsub("%s+", ""))
+end
+
+local function speedWait(kind)
+	-- Fast defaults from superior snipers; Normal is slightly safer
+	local fast = (tostring(_G.TypeSpeed or "Fast") == "Fast")
+	if kind == "type" then
+		task.wait(fast and 0.01 or 0.04)
+	elseif kind == "submit" then
+		task.wait(fast and 0.02 or 0.05)
+	elseif kind == "loop" then
+		task.wait(fast and 0.012 or 0.04)
+	elseif kind == "batch" then
+		local d = tonumber(_G.SubmitDelay) or 0
+		task.wait(math.max(d, fast and 0.05 or 0.12))
+	else
+		task.wait(fast and 0.01 or 0.03)
+	end
+end
+
+------------------------------------------------------------
+-- CODE VALIDATION (FINAL joined code — 1–2 letter codes ARE valid)
+------------------------------------------------------------
+local function looksLikeCode(token)
+	if not token then return false end
+	token = tostring(token):gsub("%s+", "")
+	if #token < 1 or #token > 48 then return false end
+	if not token:match("^[%w%_%-]+$") then return false end
+	if not token:match("[%a%d]") then return false end
+	local low = token:lower()
+	-- 1–2 letter tokens are always valid codes (IS, ON, OK, K2, A, …)
+	if #low <= 2 then return true end
+	-- reject pure trigger words only when longer
+	if low == "code" or low == "codes" or low == "riddle"
+		or low == "codeis" or low == "thecodeis" or low == "answer"
+		or low == "redeem" or low == "using" then
+		return false
+	end
+	return true
+end
+
+local function stripRich(s)
+	return tostring(s or ""):gsub("<[^>]->", "")
+end
+
+local function trim(s)
+	return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Strip ONLY multi-letter trigger noise from the arm line.
+-- NEVER drop 1–2 letter tokens (A, K, ON, OK, IS, EN, GO, …) — they are valid codes.
+local TRIGGER_FILLER = {
+	code=true, codes=true, riddle=true, answer=true,
+	using=true, redeem=true, enter=true, claim=true, please=true,
+}
+
+local function isFillerWord(w)
+	local low = tostring(w or ""):lower()
+	-- always keep 1–2 letter tokens (real codes like IS, ON, OK, K2, A)
+	if #low <= 2 then return false end
+	return TRIGGER_FILLER[low] == true
+end
+
+-- EVERY alphanumeric token after trigger (1-char and 2-char ALWAYS kept)
+local function extractListenWords(text)
+	local out = {}
+	for match in tostring(text or ""):gmatch("[%w%_%-]+") do
+		if #match >= 1 and not isFillerWord(match) then
+			out[#out + 1] = match
+		end
+	end
+	return out
+end
+
+-- Best shaped code token in a string (for same-line "code is XYZ")
+local function extractBestCodeToken(text)
+	local best = nil
+	for match in tostring(text or ""):gmatch("[%w%_%-]+") do
+		local up = string.upper(match)
+		if looksLikeCode(up) then
+			best = up
+		end
+	end
+	return best
+end
+
+------------------------------------------------------------
+-- TextBox targeting (game Codes UI) — from Traced path
+------------------------------------------------------------
+local function _isCodeBox(obj)
+	if not obj or not obj:IsA("TextBox") then return false end
+	if ScreenGui and obj:IsDescendantOf(ScreenGui) then return false end
+	local okVis = true
+	pcall(function() okVis = isGuiVisible(obj) end)
+	if not okVis then return false end
+	local hint = ((obj.PlaceholderText or "") .. " " .. obj.Name):lower()
+	if hint:find("code", 1, true) or hint:find("redeem", 1, true)
+		or hint:find("enter", 1, true) or hint:find("type", 1, true)
+		or hint:find("here", 1, true) then
+		return true
+	end
+	local sz = obj.AbsoluteSize
+	return sz.X >= 80 and sz.Y >= 20 and sz.Y <= 80
+end
+
+-- ===== REWRITTEN LISTEN + SUBMIT (Traced-style, clean) =====
+local getconnections_ = getconnections or (debug and debug.getconnections)
+local setupvalue_ = (debug and debug.setupvalue) or setupvalue
+local getupvalues_ = (debug and debug.getupvalues) or getupvalues
+local _cachedBox, _cachedConfirm = nil, nil
+
+local function findCodeBox()
+	local pg = PlayerGui or (LP and (LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")))
+	if not pg then return _cachedBox end
+	local codes = pg:FindFirstChild("Codes")
+	if not codes then return _cachedBox end
+	local main = (codes:FindFirstChild("Codes") or codes):FindFirstChild("Main")
+	local box = main and main:FindFirstChild("TextBox")
+	if box and box:IsA("TextBox") then
+		_cachedBox = box
+		return box
+	end
+	for _, d in ipairs(codes:GetDescendants()) do
+		if d:IsA("TextBox") then
+			_cachedBox = d
+			return d
+		end
+	end
+	return _cachedBox
+end
+
+local function findCodeTextBox()
+	return findCodeBox()
+end
+
+local function findConfirmButton()
+	local pg = PlayerGui or (LP and (LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")))
+	if not pg then return _cachedConfirm end
+	local codes = pg:FindFirstChild("Codes")
+	if not codes then return _cachedConfirm end
+	local codes2 = codes:FindFirstChild("Codes") or codes
+	local main = codes2:FindFirstChild("Main") or codes2
+	for _, name in ipairs({"Confirm", "Submit", "Redeem", "Enter"}) do
+		local b = main:FindFirstChild(name)
+		if b and b:IsA("GuiButton") then
+			_cachedConfirm = b
+			return b
+		end
+	end
+	-- Name match
+	for _, d in ipairs(codes:GetDescendants()) do
+		if d:IsA("GuiButton") then
+			local n = string.lower(d.Name or "")
+			if n:find("confirm", 1, true) or n:find("submit", 1, true) or n:find("redeem", 1, true) then
+				_cachedConfirm = d
+				return d
+			end
+		end
+	end
+	-- TextLabel child on ImageButton (green Submit)
+	for _, d in ipairs(codes:GetDescendants()) do
+		if d:IsA("GuiButton") then
+			for _, c in ipairs(d:GetDescendants()) do
+				if c:IsA("TextLabel") or c:IsA("TextButton") then
+					local ok, t = pcall(function() return string.lower(tostring(c.Text or "")) end)
+					if ok and (t == "submit" or t == "confirm" or t == "redeem") then
+						_cachedConfirm = d
+						return d
+					end
+				end
+			end
+		end
+	end
+	return _cachedConfirm
+end
+
+local function clearBooleans(fn, depth)
+	if not (fn and setupvalue_ and getupvalues_) then return end
+	depth = depth or 1
+	local ok, ups = pcall(getupvalues_, fn)
+	if ok and type(ups) == "table" then
+		for k, v in pairs(ups) do
+			if type(v) == "boolean" then
+				pcall(setupvalue_, fn, k, false)
+			elseif type(v) == "function" and depth > 0 then
+				clearBooleans(v, depth - 1)
+			end
+		end
+	end
+end
+
+local function fireConnections(signal, ...)
+	if not getconnections_ then return false end
+	local ok, conns = pcall(getconnections_, signal)
+	if not ok or type(conns) ~= "table" or #conns == 0 then return false end
+	local args = table.pack(...)
+	local any = false
+	for _, c in ipairs(conns) do
+		if c.Enabled ~= false then
+			local cb
+			pcall(function() cb = c.Function end)
+			clearBooleans(cb)
+			local ok2 = false
+			if cb then
+				ok2 = pcall(task.spawn, cb, table.unpack(args, 1, args.n))
+			else
+				ok2 = pcall(function() c:Fire(table.unpack(args, 1, args.n)) end)
+			end
+			any = any or ok2
+		end
+	end
+	return any
+end
+
+-- Clean auto-submit: write box then fire Confirm/Submit hard
+local function ensureCodesOpen()
+	local pg = PlayerGui or (LP and (LP:FindFirstChild("PlayerGui") or LP:FindFirstChildOfClass("PlayerGui")))
+	if not pg then return end
+	local codes = pg:FindFirstChild("Codes")
+	if codes then
+		pcall(function()
+			if codes:IsA("ScreenGui") then codes.Enabled = true end
+			codes.Visible = true
+		end)
+		-- open nested
+		local inner = codes:FindFirstChild("Codes")
+		if inner then
+			pcall(function()
+				if inner:IsA("ScreenGui") then inner.Enabled = true end
+				inner.Visible = true
+			end)
+		end
+		local main = (inner or codes):FindFirstChild("Main")
+		if main then pcall(function() main.Visible = true end) end
+	end
+end
+
+local function submitCode(text)
+	text = tostring(text or "")
+	if text == "" then return false, "empty" end
+
+	ensureCodesOpen()
+
+	local box = findCodeBox()
+	if not box then return false, "no textbox" end
+
+	-- set text immediately (no focus = no keyboard lag)
+	pcall(function()
+		box.Text = text
+		box.Active = true
+		box.Selectable = true
+	end)
+
+	local btn = findConfirmButton()
+	if btn then
+		-- Traced-proven: fire connected click handlers only (fast, no VIM wait)
+		local a = fireConnections(btn.MouseButton1Click)
+		local b = fireConnections(btn.Activated)
+		if a or b then
+			return true, "connections"
+		end
+		-- firesignal / Activate (still no yield)
+		if firesignal then
+			pcall(function() firesignal(btn.MouseButton1Click) end)
+			pcall(function() firesignal(btn.Activated) end)
+		end
+		pcall(function()
+			if btn.Activate then btn:Activate() end
+		end)
+		return true, "activate"
+	end
+
+	-- no button: FocusLost path (Traced fallback)
+	local ok = fireConnections(box.FocusLost, true)
+	if not ok then
+		pcall(function()
+			-- avoid CaptureFocus on mobile (keyboard lag) — only ReleaseFocus flag
+			fireConnections(box.FocusLost, true)
+		end)
+	end
+	return true, "focuslost"
+end
+
+local function fireSubmitButton()
+	local box = findCodeBox()
+	local t = ""
+	pcall(function() t = box and tostring(box.Text or "") or "" end)
+	return select(1, submitCode(t))
+end
+
+local function submitCodeSilent(text)
+	return submitCode(text)
+end
+
+local function writeAndSubmit(code)
+	code = formatCode(code)
+	if code == "" then return false end
+	if not looksLikeCode(code) then return false end
+	if code == _lastSubmitted and (tick() - _lastSubmittedAt) < 1.5 then
+		return false
+	end
+
+	table.clear(collectedCodes)
+	table.clear(collectedSeen)
+	collectedSeen[code] = true
+	table.insert(collectedCodes, code)
+	pcall(updateCounters)
+
+	if not _G.AutoWriteEnabled then
+		setStatus("● CAPTURED", code, "ok")
+		pushActivity("Captured " .. code, Theme.Cyan)
+		return true
+	end
+
+	local endsWithNum = tostring(code):match("%d$") ~= nil
+	-- Submit when Auto Submit is ON (default), or Redeem-on-#
+	local doSubmit = (_G.AutoSubmitEnabled ~= false)
+		or (_G.AutoRedeemOnNumber == true and endsWithNum)
+
+	ensureCodesOpen()
+	local ok, msg = false, "typed"
+	if doSubmit then
+		ok, msg = submitCode(code)
+		_lastSubmitted, _lastSubmittedAt = code, tick()
+		if ok then
+			setStatus("✓ SUBMITTED", code, "ok")
+			pushActivity("Submitted " .. code, Theme.Green)
+		else
+			-- still typed
+			local box = findCodeBox()
+			if box then pcall(function() box.Text = code end) end
+			setStatus("● TYPED", code, "ok")
+			pushActivity("Typed " .. code, Theme.Amber)
+		end
+	else
+		local box = findCodeBox()
+		if box then pcall(function() box.Text = code end) end
+		setStatus("● TYPED", code .. " (submit off)", "ok")
+		pushActivity("Typed " .. code, Theme.Amber)
+	end
+
+	table.clear(collectedCodes)
+	table.clear(collectedSeen)
+	pcall(updateCounters)
+	return true
+end
+
+local function triggerWrite()
+	if writeBusy then return end
+	if not _G.AutoWriteEnabled then return end
+	if #pendingQueue == 0 then return end
+	writeBusy = true
+	task.spawn(function()
+		local ok, err = pcall(function()
+			while _G.AutoWriteEnabled and #pendingQueue > 0 do
+				local code = table.remove(pendingQueue, 1)
+				if code then
+					pendingSeen[code] = nil
+					writeAndSubmit(code)
+				end
+				local fast = (tostring(_G.TypeSpeed or "Fast") == "Fast")
+				task.wait(fast and 0.02 or 0.08)
+			end
+		end)
+		writeBusy = false
+		if not ok then
+			pcall(function() setStatus("⚠ ERROR", tostring(err):sub(1, 40), "err") end)
+		end
+		if _G.AutoWriteEnabled and #pendingQueue > 0 then
+			triggerWrite()
+		end
+	end)
+end
+
+local function copyCode(code)
+	pcall(function()
+		if setclipboard then setclipboard(tostring(code))
+		elseif toclipboard then toclipboard(tostring(code))
+		end
+	end)
+end
+
+local _lastQCode, _lastQAt = "", 0
+local function queueCode(code, reason)
+	code = formatCode(code)
+	if code == "" then return false end
+	if not looksLikeCode(code) then return false end
+	if pendingSeen[code] then return false end
+	if code == _lastQCode and (tick() - _lastQAt) < 0.4 then return false end
+	if code == _lastSubmitted and (tick() - _lastSubmittedAt) < 3 then return false end
+	_lastQCode, _lastQAt = code, tick()
+	if #pendingQueue >= 6 then return false end
+	pendingSeen[code] = true
+	table.insert(pendingQueue, code)
+	pcall(function() copyCode(code) end)
+	pcall(function() pushActivity((reason or "CODE") .. " " .. code, Theme.Cyan) end)
+	pcall(function() updateCounters() end)
+	pcall(function() setStatus("● TRACKED", code, "ok") end)
+	if _G.AutoWriteEnabled then
+		triggerWrite()
+	end
+	return true
+end
+
+------------------------------------------------------------
+-- COUNTERS (was missing → clearArm crashed with nil call)
+------------------------------------------------------------
+local function updateCounters()
+	local qn = #pendingQueue
+	local hn = #collectedCodes
+	local bn = #bufferedParts
+	local need = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
+	if QueueLabel then
+		pcall(function() QueueLabel.Text = tostring(qn) end)
+	end
+	if CollectedLabel then
+		-- HELD shows listen buffer progress when armed, else collected count
+		if captureMode and tick() < (captureUntil or 0) then
+			pcall(function() CollectedLabel.Text = tostring(bn) .. "/" .. tostring(need) end)
+		else
+			pcall(function() CollectedLabel.Text = tostring(hn) end)
+		end
+	end
+end
+
+------------------------------------------------------------
+-- LISTEN / ARM  (Traced model: collect N words → one code)
+-- Submit After = how many listen-words to join before redeem
+------------------------------------------------------------
+local function isArmed()
+	return captureMode ~= nil and tick() < captureUntil
+end
+
+local function refreshArm(seconds)
+	seconds = seconds or 90
+	if captureMode then
+		captureUntil = tick() + seconds
+	end
+end
+
+local function armCapture(mode)
+	captureMode = mode or "code"
+	captureUntil = tick() + 120
+	table.clear(bufferedParts) -- listen word buffer (Traced tbl19)
+	local need = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
+	setStatus("● LISTENING", "0 / " .. tostring(need) .. " words", "arm")
+	pushActivity("Listening: " .. tostring(mode or "code"), Theme.Amber)
+	pcall(updateCounters)
+end
+
+local function clearArm()
+	captureMode = nil
+	captureUntil = 0
+	armedSourceRoot = nil
+	pcall(function() table.clear(bufferedParts) end)
+	pcall(updateCounters)
+end
+
+local function resetInput()
+	table.clear(pendingQueue)
+	table.clear(pendingSeen)
+	table.clear(collectedCodes)
+	table.clear(collectedSeen)
+	clearArm()
+	writeBusy = false
+	_cachedBox = nil
+	_cachedSubmitBtn = nil
+	_lastQCode, _lastQAt = "", 0
+	_lastSubmitted, _lastSubmittedAt = "", 0
+	pcall(updateCounters)
+	setStatus("● RESET", "Queue + listen buffer cleared", "wait")
+	pushActivity("Input reset", Theme.Amber)
+end
+
+-- True if token ends with a digit (VAMPIR3, 333, DUELS3, FR33)
+local function endsWithDigit(tok)
+	return tostring(tok or ""):match("%d$") ~= nil
+end
+
+-- Flush listen buffer into one code when enough words collected
+-- force=true: flush all buffered words now (used by Auto Redeem On #)
+local function flushListenBuffer(reason, force)
+	local need = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
+	local n = #bufferedParts
+	if n == 0 then return false end
+
+	-- Auto Redeem On #: if latest word ends with a digit, flush early (ignore Submit After)
+	local numberForce = false
+	if _G.AutoRedeemOnNumber and not force then
+		local last = bufferedParts[n]
+		if endsWithDigit(last) then
+			numberForce = true
+			force = true
+		end
+	end
+
+	if not force and n < need then
+		setStatus("● LISTENING", tostring(n) .. " / " .. tostring(need), "arm")
+		pcall(updateCounters)
+		return false
+	end
+
+	local take = force and n or need
+	local parts = {}
+	for i = 1, take do
+		parts[i] = bufferedParts[i]
+	end
+	local overflow = {}
+	for i = take + 1, n do
+		overflow[#overflow + 1] = bufferedParts[i]
+	end
+	table.clear(bufferedParts)
+	for _, w in ipairs(overflow) do
+		bufferedParts[#bufferedParts + 1] = w
+	end
+
+	local joined = formatCode(table.concat(parts, ""))
+	if #bufferedParts == 0 then
+		clearArm()
+	else
+		refreshArm(90)
+	end
+	if joined ~= "" then
+		local tag = reason or "Code"
+		if numberForce then tag = tag .. " #" end
+		queueCode(joined, tag)
+	end
+	pcall(updateCounters)
+	return true
+end
+
+
+-- Aetherion-style riddle helpers (used by triggers + solver)
+local function hasRiddleWord(low)
+	if low:find("%f[%w_]riddle%f[^%w_]") then return true end
+	if low:match("^riddle") or low:match("^the%s+riddle") then return true end
+	return false
+end
+
+local function stripRiddlePayload(text)
+	local q = tostring(text or ""):lower()
+	q = q:gsub("^%s*the%s+riddle%s+is%s*[:%-]?%s*", "")
+		:gsub("^%s*the%s+riddle%s*:%s*", "")
+		:gsub("^%s*the%s+riddle%s*%-%s*", "")
+		:gsub("^%s*the%s+riddle%s+", "")
+		:gsub("^%s*riddle%s+is%s*[:%-]?%s*", "")
+		:gsub("^%s*riddle%s*:%s*", "")
+		:gsub("^%s*riddle%s*%-%s*", "")
+		:gsub("^%s*riddle%s+", "")
+		:gsub("^%s*question%s+is%s*[:%-]?%s*", "")
+		:gsub("^%s*question%s*:%s*", "")
+		:gsub("^%s*the%s+answer%s+is%s*[:%-]?%s*", "")
+		:gsub("^%s*answer%s+is%s*[:%-]?%s*", "")
+		:gsub("^%s*and%s+", "")
+		:gsub("^%s*what%s+is%s+", "")
+		:gsub("^%s*whats%s+", "")
+		:gsub("^%s*what's%s+", "")
+		:gsub("^%s*tell%s+me%s+", "")
+		:gsub("^%s*the%s+answer%s+to%s+", "")
+		:gsub("^%s*the%s+", "")
+	return (q:match("^%s*(.-)%s*$") or q)
+end
+
+local TRIGGER_PATTERNS = {
+	-- Manual / AI riddle markers (Aetherion-style + K2)
+	{ pat = "the riddle is", mode = "riddle" },
+	{ pat = "riddle is", mode = "riddle" },
+	{ pat = "the riddle:", mode = "riddle" },
+	{ pat = "riddle:", mode = "riddle" },
+	{ pat = "the riddle -", mode = "riddle" },
+	{ pat = "riddle -", mode = "riddle" },
+	{ pat = "the answer is", mode = "riddle" },
+	{ pat = "answer is", mode = "riddle" },
+	{ pat = "the question is", mode = "riddle" },
+	{ pat = "question is", mode = "riddle" },
+	{ pat = "question:", mode = "riddle" },
+	{ pat = "solve this riddle", mode = "riddle" },
+	{ pat = "solve the riddle", mode = "riddle" },
+	-- Code markers
+	{ pat = "the code is", mode = "code" },
+	{ pat = "code is", mode = "code" },
+	{ pat = "use this code", mode = "code" },
+	{ pat = "use code", mode = "code" },
+	{ pat = "code:", mode = "code" },
+	{ pat = "code -", mode = "code" },
+	{ pat = "redeem code", mode = "code" },
+	{ pat = "enter code", mode = "code" },
+}
+
+local function matchTrigger(message)
+	if _G.TrackersEnabled == false then return nil, nil end
+	local raw = stripRich(message)
+	local low = raw:lower()
+	local bestPos, bestMode, bestEnd = nil, nil, nil
+	for _, t in ipairs(TRIGGER_PATTERNS) do
+		local a, b = low:find(t.pat, 1, true)
+		if a and (not bestPos or a < bestPos or (a == bestPos and b > bestEnd)) then
+			bestPos, bestMode, bestEnd = a, t.mode, b
+		end
+	end
+	if not bestPos then
+		local n = trim(low)
+		if n == "code" then return "code", "" end
+		if n == "riddle" or n == "the riddle" then return "riddle", "" end
+		-- Aetherion: any message containing word "riddle" as control marker
+		if hasRiddleWord(low) then
+			local stripped = stripRiddlePayload(raw)
+			return "riddle", stripped
+		end
+		return nil, nil
+	end
+	return bestMode, trim(raw:sub(bestEnd + 1))
+end
+
+------------------------------------------------------------
+-- NOTIFICATION REMOTE (Traced source — not PlayerGui scan)
+------------------------------------------------------------
+local function getNotificationRemote()
+	local rs = game:GetService("ReplicatedStorage")
+	local controllers = rs:FindFirstChild("Controllers")
+	if not controllers then return nil end
+	local ok, mod = pcall(function()
+		return require(controllers:FindFirstChild("NotificationController", true))
+	end)
+	if not ok or type(mod) ~= "table" or type(mod.Start) ~= "function" then
+		return nil
+	end
+	local getupvalues_ = (debug and debug.getupvalues) or getupvalues
+	if not getupvalues_ then return nil end
+	local ok2, ups = pcall(getupvalues_, mod.Start)
+	if not ok2 or type(ups) ~= "table" then return nil end
+	local packages = rs:FindFirstChild("Packages")
+	local net = packages and packages:FindFirstChild("Net")
+	for _, v in pairs(ups) do
+		if typeof(v) == "Instance" and (v:IsA("RemoteEvent") or v:IsA("UnreliableRemoteEvent")) then
+			if not net or v.Parent == net then
+				return v
+			end
+		end
+	end
+	return nil
+end
+
+
+-- Fire announcement the Luna way: getconnections on the real notify remote.
+-- That is the path that already works when Luna TEST SENDER fires (K2 heard FIXSCRIPTFROM).
+-- ============================================================
+-- LUNA EXACT fireAnnouncement (signature + avatar userId)
+-- Fire(txt, 5.5, "Sounds.Sfx.Blop", "Top", 2678001507)
+-- ============================================================
+local SAMMY_USER_ID = 2678001507
+
+local function fireAnnouncement(txt)
+	txt = tostring(txt or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if txt == "" then return false, "empty" end
+
+	local remote = nil
+	pcall(function() remote = getNotificationRemote() end)
+
+	local getconns = (typeof(getconnections) == "function" and getconnections)
+		or (debug and typeof(debug.getconnections) == "function" and debug.getconnections)
+	local method = nil
+
+	-- Luna exact: firesignal first
+	if remote and typeof(firesignal) == "function" then
+		local ok = pcall(function()
+			firesignal(remote.OnClientEvent, txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+		end)
+		if ok then method = "firesignal" end
+	end
+
+	-- Luna exact: getconnections Fire with same args
+	if not method and remote and typeof(getconns) == "function" then
+		local ok = pcall(function()
+			local conns = getconns(remote.OnClientEvent)
+			if type(conns) == "table" then
+				for _, c in ipairs(conns) do
+					pcall(function()
+						if c.Enabled ~= false then
+							c:Fire(txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+						end
+					end)
+				end
+			end
+		end)
+		if ok then method = "getconnections" end
+	end
+
+	-- Fallback: direct handler (no double if remote already fired — debounce covers it)
+	if not method then
+		if type(onAnnounceDebounced) == "function" then
+			pcall(onAnnounceDebounced, txt, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+			method = "local"
+		elseif type(onAnnounce) == "function" then
+			pcall(onAnnounce, txt, "Top")
+			method = "local"
+		end
+	end
+
+	return method ~= nil, method or "unresolved"
+end
+
+-- alias used by older call sites
+local function fireFakeAnnouncement(text, opts)
+	opts = opts or {}
+	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if text == "" then return false, "empty" end
+	if opts.skipLogic then
+		-- visual-only still fires remote for top banner (Luna) but we skip by not calling if skipLogic
+		-- just show nothing for logic; still try visual via remote without extra onAnnounce
+		local remote = nil
+		pcall(function() remote = getNotificationRemote() end)
+		local getconns = (typeof(getconnections) == "function" and getconnections)
+		if remote and getconns then
+			pcall(function()
+				for _, c in ipairs(getconns(remote.OnClientEvent) or {}) do
+					pcall(function()
+						if c.Enabled ~= false then
+							c:Fire(text, 5.5, "Sounds.Sfx.Blop", "Top", SAMMY_USER_ID)
+						end
+					end)
+				end
+			end)
+		end
+		return true, "visual"
+	end
+	return fireAnnouncement(text)
+end
+
+local function isSystemAnnouncement(text)
+	local t = stripRich(text):lower():gsub("%s+", " ")
+	if t == "" then return true end
+	if t:find("activated", 1, true) then return true end
+	if t:find("bubblegum", 1, true) then return true end
+	if t:find("luck", 1, true) and t:find("sammy", 1, true) then return true end
+	if t:find("event has", 1, true) then return true end
+	if t:find("base is", 1, true) then return true end
+	if t:find("trade has", 1, true) then return true end
+	if t:find("brainrot express", 1, true) then return true end
+	if t:find("friend boost", 1, true) then return true end
+	if t:find("please wait", 1, true) then return true end
+	if t:find("invalid code", 1, true) then return true end
+	if t:find("request failed", 1, true) then return true end
+	if t:find("you locked", 1, true) then return true end
+	if t:find("someone is stealing", 1, true) then return true end
+	return false
+end
+
+-- Core announce handler (Traced listen loop + K2 GUI status)
+local function looksLikeRiddleQuestion(text)
+	local low = tostring(text or ""):lower()
+	if hasRiddleWord(low) then return true end
+	if low:find("what is", 1, true) or low:find("what's", 1, true) or low:find("whats", 1, true) then return true end
+	if low:find("who is", 1, true) or low:find("who made", 1, true) or low:find("who created", 1, true) then return true end
+	if low:find("how old", 1, true) or low:find("how many", 1, true) then return true end
+	if low:find("where do", 1, true) or low:find("where is", 1, true) or low:find("where am", 1, true) then return true end
+	if low:find("favorite", 1, true) then return true end
+	if low:find("name of the game", 1, true) then return true end
+	if low:match("^question") then return true end
+	if low:find("?", 1, true) and (#low < 120) and not low:find("code", 1, true) then return true end
+	return false
+end
+
+local function onAnnounce(rawText, positionHint)
+	if not _G.ScriptEnabled then return end
+	rawText = stripRich(tostring(rawText or ""))
+	if rawText == "" or #rawText > 400 then return end
+	if isSystemAnnouncement(rawText) then return end
+
+	-- Sammy filter: only drop when we KNOW it is not a top/middle announcement
+	if _G.SammyFilterEnabled ~= false and positionHint ~= nil and positionHint ~= "" then
+		local ph = tostring(positionHint)
+		-- Accept Top/Middle/Center and numeric userids (some hooks pass userId as arg2)
+		if ph ~= "Top" and ph ~= "Middle" and ph ~= "Center" then
+			local asNum = tonumber(ph)
+			if not asNum then
+				-- unknown position → still allow if message looks like code/riddle trigger
+				local low = rawText:lower()
+				if not (low:find("code", 1, true) or low:find("riddle", 1, true) or isArmed()) then
+					return
+				end
+			end
+		end
+	end
+
+	local mode, remainder = matchTrigger(rawText)
+	local riddleOn = (_G.AIRiddleEnabled == true) or (_G.RiddleSolverEnabled == true)
+	local isRiddleTrigger = (mode == "riddle")
+	local isRiddleQuestion = looksLikeRiddleQuestion(rawText)
+
+	-- ============================================================
+	-- RIDDLE TAKES OVER (never let code sniper write the question)
+	-- ============================================================
+	-- Code trigger / armed code always wins over AI (prevents AI FAIL on codes)
+	if mode == "code" or (captureMode == "code" and isArmed()) then
+		-- fall through to code path below
+	elseif riddleOn and (isRiddleTrigger or isRiddleQuestion or captureMode == "ai_riddle" or captureMode == "riddle") then
+		-- If already armed for CODE only and this is clearly a code word path, skip —
+		-- but never buffer a riddle question as code words.
+		if isRiddleTrigger or isRiddleQuestion or captureMode == "ai_riddle" or captureMode == "riddle" then
+			local body = trim((remainder and remainder ~= "" and isRiddleTrigger) and remainder or rawText)
+
+			if _G.AIRiddleEnabled then
+				_aiRiddleBuf = body
+				setStatus("● AI RIDDLE", "Solving...", "arm")
+				pushActivity("AI riddle: " .. body:sub(1, 28), Theme.Violet)
+				solveAIRiddle(body, function(ans, err)
+					if ans and looksLikeCode(formatCode(ans)) then
+						clearArm()
+						_aiRiddleBuf = ""
+						_lastRiddleQ = tostring(riddleText or _aiRiddleBuf or ""); _lastRiddleA = formatCode(ans); queueCode(formatCode(ans), "AI Riddle")
+					else
+						-- try local exact one more time with full text
+						local localAns = nil
+						pcall(function() localAns = localExactAnswer(body) end)
+						if localAns and looksLikeCode(formatCode(localAns)) then
+							clearArm()
+							queueCode(formatCode(localAns), "AI Riddle DB")
+						else
+							setStatus("● AI FAIL", tostring(err or "no answer"), "err")
+							pushActivity("AI fail: " .. tostring(err or "no answer"), Theme.Amber)
+						end
+					end
+				end)
+				return
+			end
+
+			if _G.RiddleSolverEnabled then
+				local ans = nil
+				local qBody = stripRiddlePayload(body)
+				pcall(function() ans = solveRiddle(qBody) end)
+				if not ans then pcall(function() ans = solveRiddle(body) end) end
+				if not ans then pcall(function() ans = localExactAnswer(qBody) end) end
+				if not ans then pcall(function() ans = localExactAnswer(body) end) end
+				if ans and looksLikeCode(formatCode(ans)) then
+					clearArm()
+					queueCode(formatCode(ans), "Manual Riddle")
+					return
+				end
+				armCapture("riddle")
+				setStatus("● RIDDLE", "listening...", "arm")
+				return
+			end
+		end
+	end
+
+	-- ============================================================
+	-- CODE PATH (rewritten Traced-style state machine)
+	-- ============================================================
+	-- State: captureMode == "code" + isArmed() means listening for N words
+	do
+		local need = math.max(1, math.floor(tonumber(_G.SubmitAfterCount) or 1))
+
+		local function addWordsAndMaybeFlush(src, reason)
+			local words = extractListenWords(src or "")
+			if #words == 0 then
+				setStatus("● LISTENING", tostring(#bufferedParts) .. " / " .. tostring(need), "arm")
+				pcall(updateCounters)
+				return
+			end
+			for _, w in ipairs(words) do
+				local low = string.lower(w)
+				-- only skip pure trigger labels (never skip IS/THE/ON/OK/1–2 letter codes)
+				if low ~= "code" and low ~= "codes" and low ~= "riddle" and low ~= "answer" then
+					bufferedParts[#bufferedParts + 1] = w
+				end
+			end
+			pcall(function()
+				local box = findCodeBox()
+				if box then
+					box.Text = table.concat(bufferedParts, "")
+				end
+			end)
+			setStatus("● LISTENING", tostring(#bufferedParts) .. " / " .. tostring(need), "arm")
+			pcall(updateCounters)
+
+			local n = #bufferedParts
+			if n == 0 then return end
+
+			-- AUTO REDEEM ON #: flush early when latest word ends with a digit
+			local numberForce = false
+			if _G.AutoRedeemOnNumber then
+				local last = bufferedParts[n]
+				if endsWithDigit(last) then
+					numberForce = true
+				end
+			end
+
+			local shouldFlush = numberForce or (n >= need)
+			if not shouldFlush then return end
+
+			local take = numberForce and n or need
+			local parts = {}
+			for i = 1, take do parts[i] = bufferedParts[i] end
+			local overflow = {}
+			for i = take + 1, n do overflow[#overflow + 1] = bufferedParts[i] end
+			table.clear(bufferedParts)
+			for _, w in ipairs(overflow) do bufferedParts[#bufferedParts + 1] = w end
+			local joined = formatCode(table.concat(parts, ""))
+			if #bufferedParts == 0 then
+				clearArm()
+			else
+				refreshArm(120)
+			end
+			if joined ~= "" and looksLikeCode(joined) then
+				local tag = reason or "Code"
+				if numberForce then tag = tag .. " #" end
+				queueCode(joined, tag)
+			end
+			pcall(updateCounters)
+		end
+
+		if mode == "code" then
+			-- Trigger message: "code is" or "code is XYZ"
+			local rem = trim(remainder or "")
+			if not (captureMode == "code" and isArmed()) then
+				armCapture("code")
+			else
+				refreshArm(120)
+			end
+			if rem ~= "" then
+				addWordsAndMaybeFlush(rem, "Code")
+			else
+				setStatus("● LISTENING", "0 / " .. tostring(need), "arm")
+				pcall(updateCounters)
+			end
+			return
+		end
+
+		-- Already listening: any non-trigger message adds words
+		if captureMode == "code" and isArmed() then
+			if looksLikeRiddleQuestion(rawText) and riddleOn then
+				return
+			end
+			refreshArm(120)
+			addWordsAndMaybeFlush(rawText, "Code")
+			return
+		end
+	end
+
+	-- Armed ai/manual riddle continuation
+-- Armed ai/manual riddle continuation
+	if captureMode == "ai_riddle" and _G.AIRiddleEnabled then
+		_aiRiddleBuf = (_aiRiddleBuf or "") .. " " .. tostring(rawText or "")
+		setStatus("● AI RIDDLE", "Solving...", "arm")
+		solveAIRiddle(_aiRiddleBuf, function(ans, err)
+			if ans and looksLikeCode(formatCode(ans)) then
+				clearArm()
+				_aiRiddleBuf = ""
+				queueCode(formatCode(ans), "AI Riddle")
+			else
+				pushActivity("AI: " .. tostring(err or "retry"), Theme.Amber)
+			end
+		end)
+		return
+	end
+
+	if captureMode == "riddle" and _G.RiddleSolverEnabled then
+		local ans = nil
+		local qBody = stripRiddlePayload(rawText)
+		pcall(function() ans = solveRiddle(qBody) end)
+		if not ans then pcall(function() ans = solveRiddle(rawText) end) end
+		if not ans then pcall(function() ans = localExactAnswer(qBody) end) end
+		if not ans then pcall(function() ans = localExactAnswer(rawText) end) end
+		if ans and looksLikeCode(formatCode(ans)) then
+			clearArm()
+			queueCode(formatCode(ans), "Manual Riddle")
+		end
+		return
+	end
+end
+
+local function onAnnounceDebounced(...)
+	local packed = table.pack(...)
+	local text, pos = nil, nil
+	for i = 1, packed.n do
+		local v = packed[i]
+		if typeof(v) == "string" then
+			if not text and #v > 0 then
+				text = v
+			elseif text and not pos then
+				-- Traced: position often 4th arg ("Top")
+				if v == "Top" or v == "Bottom" or v == "Center" or v == "Middle"
+					or v == "Left" or v == "Right" or v == "TopRight" or v == "TopLeft"
+					or v == "BottomRight" or v == "BottomLeft" then
+					pos = v
+				end
+			end
+		end
+	end
+	if not text then return end
+	local now = tick()
+	if text == _lastAnnText and (now - _lastAnnAt) < 0.25 then return end
+	_lastAnnText, _lastAnnAt = text, now
+	pcall(onAnnounce, text, pos)
+end
+
+-- ============================================================
+
+------------------------------------------------------------
+-- BLOCK ALL EVENTS (from Traced / Brainrot event tool)
+------------------------------------------------------------
+local eventBlock = {
+	ready = false,
+	why = "EventController unavailable",
+	IsBlocked = function() return false end,
+	Block = function() return false, "unavailable" end,
+	Unblock = function() return false, "unavailable" end,
+}
+
+task.spawn(function()
+	local RS = game:GetService("ReplicatedStorage")
+	local function requireController(name)
+		local folder = RS:FindFirstChild("Controllers")
+		folder = folder and folder:FindFirstChild(name, true)
+		if not (folder and folder:IsA("ModuleScript")) then return nil end
+		local ok, mod = pcall(require, folder)
+		if ok and type(mod) == "table" then return mod end
+	end
+
+	local EventController = requireController("EventController")
+	local EffectController = requireController("EffectController")
+	local valid = EventController
+		and type(EventController.Events) == "table"
+		and type(EventController.Execute) == "function"
+
+	if not valid then
+		eventBlock.why = "EventController missing Events/Execute"
+		return
+	end
+
+	local tool = _G.__BrainrotEventTool
+	if not tool then
+		tool = {}
+		_G.__BrainrotEventTool = tool
+	end
+	tool.origExecute = tool.origExecute or EventController.Execute
+	tool.origGetActive = tool.origGetActive or EventController.GetActiveEvents
+	if EffectController then
+		tool.origRun = tool.origRun or EffectController.Run
+	end
+	tool.fakes = tool.fakes or {}
+	tool.capture = tool.capture or {}
+	tool.spawned = tool.spawned or {}
+	tool.clearedAttrs = tool.clearedAttrs or {}
+	tool.stashed = tool.stashed or {}
+	if tool.blocked == nil then tool.blocked = false end
+
+	eventBlock.S = tool
+	eventBlock.IsBlocked = function() return tool.blocked == true end
+
+	local effectsTable
+	local getupvalue_ = debug and debug.getupvalue
+	if getupvalue_ then
+		local ok, v = pcall(getupvalue_, tool.origExecute, 5)
+		if ok and type(v) == "table" then effectsTable = v end
+	end
+
+	if not tool.shimmed then
+		EventController.GetActiveEvents = function(self)
+			local list = {}
+			if not tool.blocked then
+				local ok, res = pcall(tool.origGetActive, self)
+				if ok and type(res) == "table" then
+					for _, e in pairs(res) do list[#list + 1] = e end
+				end
+			end
+			for _, fake in pairs(tool.fakes) do list[#list + 1] = fake end
+			return list
+		end
+		tool.shimmed = true
+	end
+
+	local function refreshControllers()
+		local lighting = requireController("LightingController")
+		if lighting and type(lighting.Update) == "function" then
+			pcall(function() lighting:Update() end)
+		end
+		local sound = requireController("SoundController")
+		if sound and type(sound.UpdateOST) == "function" then
+			pcall(function() sound:UpdateOST() end)
+		end
+	end
+
+	local function isSkyEffect(inst)
+		return inst:IsA("Sky") or inst:IsA("Atmosphere")
+			or inst:IsA("Clouds") or inst:IsA("PostEffect")
+	end
+
+	local function stopAllEffects()
+		if not (EffectController and type(EffectController.ActiveEffects) == "table") then
+			return 0
+		end
+		local keys = {}
+		for k in pairs(EffectController.ActiveEffects) do keys[#keys + 1] = k end
+		for _, k in ipairs(keys) do
+			local def = type(EffectController.Effects) == "table" and EffectController.Effects[k] or nil
+			EffectController.ActiveEffects[k] = nil
+			if type(def) == "table" then
+				if type(def.OnUpdate) == "function" then pcall(function() def:OnUpdate() end) end
+				if type(def.OnStop) == "function" then pcall(function() def:OnStop() end) end
+			end
+		end
+		return #keys
+	end
+
+	local ATTR_KEEP = {
+		EventsLoaded = true, NextCrystalEvent = true, CrystalEventLastTime = true,
+		SantaMerchantStockId = true, SantaMerchantNextStockId = true,
+		FuseMachineLuck = true, FuseMachineLuckTimer = true,
+	}
+
+	local function clearEventAttrs()
+		local cleared = 0
+		for k, v in pairs(RS:GetAttributes()) do
+			if type(k) == "string" and v == true and not ATTR_KEEP[k] then
+				if k:find("Event") or k:find("Phase") or k:find("Hour") then
+					pcall(function() RS:SetAttribute(k, nil) end)
+					tool.clearedAttrs[k] = true
+					cleared = cleared + 1
+				end
+			end
+		end
+		return cleared
+	end
+
+	local function restoreEventAttrs()
+		local n = 0
+		for k in pairs(tool.clearedAttrs) do
+			pcall(function() RS:SetAttribute(k, true) end)
+			n = n + 1
+		end
+		table.clear(tool.clearedAttrs)
+		return n
+	end
+
+	local function stopLoopedSounds()
+		local n = 0
+		-- SoundService children only (avoid full workspace:GetDescendants freeze)
+		pcall(function()
+			local SS = game:GetService("SoundService")
+			for _, d in ipairs(SS:GetDescendants()) do
+				if d:IsA("Sound") and d.Playing and d.Looped then
+					pcall(function() d:Stop() end)
+					n = n + 1
+				end
+			end
+		end)
+		return n
+	end
+
+	local function restoreStashed()
+		local n = 0
+		for k, parent in pairs(tool.stashed) do
+			if typeof(k) == "Instance" then
+				pcall(function() k.Parent = parent end)
+				n = n + 1
+			end
+			tool.stashed[k] = nil
+		end
+		return n
+	end
+
+	local function getEffectsApi()
+		local e = _G.Effects
+		if type(e) == "table" and type(e.Block) == "function" and type(e.Unblock) == "function" then
+			return e
+		end
+	end
+
+	eventBlock.Block = function()
+		local api = getEffectsApi()
+		if api then
+			api.Block()
+			tool.blocked = true
+			return true, "blocked (effects panel)"
+		end
+		local cancelled = 0
+		for k, ev in pairs(EventController.Events) do
+			if type(ev) == "table" and rawget(ev, "Active") then
+				local ok = type(EventController.Cancel) == "function"
+					and pcall(function() return EventController:Cancel(k) end)
+				if not ok then
+					rawset(ev, "Active", false)
+					rawset(ev, "__started", false)
+				end
+				cancelled = cancelled + 1
+			end
+		end
+		local effectsKilled = stopAllEffects()
+		for k, cap in pairs(tool.capture) do
+			if type(cap) == "table" and type(cap.caught) == "table" then
+				for inst in pairs(cap.caught) do
+					if typeof(inst) == "Instance" and inst.Parent and not isSkyEffect(inst) then
+						pcall(function() inst:Destroy() end)
+					end
+				end
+			end
+			tool.capture[k] = nil
+		end
+		table.clear(tool.spawned)
+		table.clear(tool.fakes)
+		if effectsTable then
+			for k, group in pairs(effectsTable) do
+				if type(group) == "table" then
+					for _, inst in ipairs(group) do
+						if typeof(inst) == "Instance" and not isSkyEffect(inst) then
+							pcall(function() inst:Destroy() end)
+						end
+					end
+				end
+				effectsTable[k] = nil
+			end
+		end
+		EventController.Execute = function() return false end
+		if EffectController then
+			EffectController.Run = function() return false, false end
+		end
+		tool.blocked = true
+		refreshControllers()
+		clearEventAttrs()
+		local sounds = stopLoopedSounds()
+		return true, ("blocked %d event(s), %d fx, %d sound(s)"):format(cancelled, effectsKilled, sounds)
+	end
+
+	eventBlock.Unblock = function()
+		local api = getEffectsApi()
+		if api then
+			api.Unblock()
+			tool.blocked = false
+			return true, "unblocked (effects panel)"
+		end
+		EventController.Execute = tool.origExecute
+		if EffectController and tool.origRun then
+			EffectController.Run = tool.origRun
+		end
+		tool.blocked = false
+		local attrs = restoreEventAttrs()
+		local models = restoreStashed()
+		refreshControllers()
+		return true, ("unblocked - %d flag(s), %d model(s) restored"):format(attrs, models)
+	end
+
+	eventBlock.ready = true
+	eventBlock.why = nil
+
+	-- Apply saved preference
+	if _G.BlockEventsEnabled == true then
+		pcall(function() eventBlock.Block() end)
+	end
+end)
+
+
+-- LUNA EXACT TEST SENDER (opened from Settings)
+-- ============================================================
+local function buildTestSender()
+	local pg = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 3)
+	if not pg then return end
+	local host = pg:FindFirstChild("K2CodeSniperV2") or pg:FindFirstChild("K2CodeSniper") or pg
+	local existing = host:FindFirstChild("TestSender")
+	if existing then existing:Destroy() end
+
+	local W, H = 308, 198
+	local P = Instance.new("Frame")
+	P.Name = "TestSender"
+	P.Size = UDim2.fromOffset(W, H)
+	P.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
+	P.BackgroundColor3 = Color3.fromRGB(12, 18, 28)
+	P.BorderSizePixel = 0
+	P.Active = true
+	P.ZIndex = 200
+	P.Parent = host
+	local pc = Instance.new("UICorner"); pc.CornerRadius = UDim.new(0, 12); pc.Parent = P
+	local ps = Instance.new("UIStroke"); ps.Color = Color3.fromRGB(40, 90, 180); ps.Thickness = 1; ps.Transparency = 0.3; ps.Parent = P
+
+	local PH = Instance.new("Frame")
+	PH.Size = UDim2.new(1, 0, 0, 34)
+	PH.BackgroundColor3 = Color3.fromRGB(16, 24, 40)
+	PH.BorderSizePixel = 0
+	PH.ZIndex = 201
+	PH.Active = true
+	PH.Parent = P
+	local phc = Instance.new("UICorner"); phc.CornerRadius = UDim.new(0, 12); phc.Parent = PH
+	local phfix = Instance.new("Frame")
+	phfix.Size = UDim2.new(1, 0, 0, 12)
+	phfix.Position = UDim2.new(0, 0, 1, -12)
+	phfix.BackgroundColor3 = Color3.fromRGB(16, 24, 40)
+	phfix.BorderSizePixel = 0
+	phfix.ZIndex = 201
+	phfix.Parent = PH
+
+	local logo = Instance.new("Frame")
+	logo.Size = UDim2.fromOffset(18, 18)
+	logo.Position = UDim2.fromOffset(10, 8)
+	logo.BackgroundColor3 = Color3.fromRGB(40, 110, 220)
+	logo.BorderSizePixel = 0
+	logo.ZIndex = 202
+	logo.Parent = PH
+	local lc = Instance.new("UICorner"); lc.CornerRadius = UDim.new(1, 0); lc.Parent = logo
+
+	local title = Instance.new("TextLabel")
+	title.Size = UDim2.new(1, -70, 1, 0)
+	title.Position = UDim2.fromOffset(34, 0)
+	title.BackgroundTransparency = 1
+	title.Text = "TEST SENDER"
+	title.TextColor3 = Color3.fromRGB(200, 220, 255)
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 12
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 202
+	title.Parent = PH
+
+	local X = Instance.new("TextButton")
+	X.Size = UDim2.fromOffset(22, 22)
+	X.Position = UDim2.new(1, -28, 0.5, -11)
+	X.BackgroundColor3 = Color3.fromRGB(20, 34, 64)
+	X.Text = "X"
+	X.TextColor3 = Color3.fromRGB(200, 220, 255)
+	X.Font = Enum.Font.GothamBold
+	X.TextSize = 10
+	X.AutoButtonColor = false
+	X.BorderSizePixel = 0
+	X.ZIndex = 202
+	X.Parent = PH
+	local xc = Instance.new("UICorner"); xc.CornerRadius = UDim.new(0, 6); xc.Parent = X
+	X.MouseButton1Click:Connect(function() P:Destroy() end)
+
+	local sub = Instance.new("TextLabel")
+	sub.Size = UDim2.new(1, -24, 0, 12)
+	sub.Position = UDim2.fromOffset(12, 42)
+	sub.BackgroundTransparency = 1
+	sub.Text = "FAKE RIDDLE  ·  as SpyderSammy"
+	sub.TextColor3 = Color3.fromRGB(110, 140, 190)
+	sub.Font = Enum.Font.Gotham
+	sub.TextSize = 10
+	sub.TextXAlignment = Enum.TextXAlignment.Left
+	sub.ZIndex = 202
+	sub.Parent = P
+
+	-- Input well (polished text box)
+	local boxWell = Instance.new("Frame")
+	boxWell.Size = UDim2.new(1, -24, 0, 48)
+	boxWell.Position = UDim2.fromOffset(12, 54)
+	boxWell.BackgroundColor3 = Color3.fromRGB(8, 14, 28)
+	boxWell.BorderSizePixel = 0
+	boxWell.ZIndex = 202
+	boxWell.Parent = P
+	local bwc = Instance.new("UICorner"); bwc.CornerRadius = UDim.new(0, 9); bwc.Parent = boxWell
+	local boxSt = Instance.new("UIStroke")
+	boxSt.Color = Color3.fromRGB(45, 95, 175)
+	boxSt.Thickness = 1.35
+	boxSt.Transparency = 0.35
+	boxSt.Parent = boxWell
+	do
+		local g = Instance.new("UIGradient")
+		g.Rotation = 90
+		g.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(14, 24, 44)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 12, 26)),
+		})
+		g.Parent = boxWell
+	end
+
+	local Box = Instance.new("TextBox")
+	Box.Size = UDim2.new(1, -14, 1, -10)
+	Box.Position = UDim2.fromOffset(7, 5)
+	Box.BackgroundTransparency = 1
+	Box.BorderSizePixel = 0
+	Box.PlaceholderText = "paste or type announcement…"
+	Box.PlaceholderColor3 = Color3.fromRGB(80, 105, 145)
+	Box.Text = ""
+	Box.TextColor3 = Color3.fromRGB(210, 228, 255)
+	Box.ClearTextOnFocus = false
+	Box.Font = Enum.Font.Gotham
+	Box.TextSize = 12
+	Box.TextXAlignment = Enum.TextXAlignment.Left
+	Box.TextYAlignment = Enum.TextYAlignment.Top
+	Box.TextWrapped = true
+	Box.MultiLine = true
+	Box.ZIndex = 203
+	Box.Parent = boxWell
+	Box.Focused:Connect(function()
+		boxSt.Color = Color3.fromRGB(70, 160, 255)
+		boxSt.Transparency = 0.08
+		boxSt.Thickness = 1.6
+	end)
+	Box.FocusLost:Connect(function()
+		boxSt.Color = Color3.fromRGB(45, 95, 175)
+		boxSt.Transparency = 0.35
+		boxSt.Thickness = 1.35
+	end)
+
+	local SampleBtn = Instance.new("TextButton")
+	SampleBtn.Size = UDim2.fromOffset(120, 32)
+	SampleBtn.Position = UDim2.fromOffset(12, 112)
+	SampleBtn.BackgroundColor3 = Color3.fromRGB(20, 34, 64)
+	SampleBtn.Text = "SAMPLE"
+	SampleBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+	SampleBtn.Font = Enum.Font.GothamBold
+	SampleBtn.TextSize = 12
+	SampleBtn.AutoButtonColor = false
+	SampleBtn.BorderSizePixel = 0
+	SampleBtn.ZIndex = 202
+	SampleBtn.Parent = P
+	local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(0, 8); sc.Parent = SampleBtn
+
+	local SendBtn = Instance.new("TextButton")
+	SendBtn.Size = UDim2.fromOffset(132, 32)
+	SendBtn.Position = UDim2.new(1, -144, 0, 112)
+	SendBtn.BackgroundColor3 = Color3.fromRGB(40, 110, 220)
+	SendBtn.Text = "SEND"
+	SendBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	SendBtn.Font = Enum.Font.GothamBold
+	SendBtn.TextSize = 12
+	SendBtn.AutoButtonColor = false
+	SendBtn.BorderSizePixel = 0
+	SendBtn.ZIndex = 202
+	SendBtn.Parent = P
+	local sec = Instance.new("UICorner"); sec.CornerRadius = UDim.new(0, 8); sec.Parent = SendBtn
+
+	local note = Instance.new("TextLabel")
+	note.Size = UDim2.new(1, -24, 0, 28)
+	note.Position = UDim2.fromOffset(12, 152)
+	note.BackgroundTransparency = 1
+	note.Text = "posts as SpyderSammy through the same top-notification handler - client side only"
+	note.TextColor3 = Color3.fromRGB(70, 90, 130)
+	note.Font = Enum.Font.Gotham
+	note.TextSize = 9
+	note.TextWrapped = true
+	note.TextXAlignment = Enum.TextXAlignment.Left
+	note.ZIndex = 202
+	note.Parent = P
+
+	local samples = {
+		"what is my real name", "how old am i", "what is my favorite color", "what is my favorite food",
+		"what is my cats name", "what is the name of the game", "who made steal a brainrot",
+		"what is my favorite number", "what is my name twice", "where do i live",
+		"what event did pot pumpkin come out in", "what craft did the la supreme come from",
+	}
+	SampleBtn.MouseButton1Click:Connect(function()
+		Box.Text = samples[math.random(1, #samples)]
+	end)
+
+	local function doSend()
+		local txt = tostring(Box.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if txt == "" then return end
+		local ok, method = fireAnnouncement(txt)
+		pushActivity((ok and "sent: " or "fail: ") .. tostring(method), ok and Theme.Green or Theme.Amber)
+		Box.Text = ""
+	end
+	SendBtn.MouseButton1Click:Connect(doSend)
+	Box.FocusLost:Connect(function(enter)
+		if enter then doSend() end
+	end)
+
+	-- drag by header
+	local dragging, dragStart, startPos = false, nil, nil
+	PH.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = P.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	game:GetService("UserInputService").InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - dragStart
+			P.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+_G.K2OpenTestSender = buildTestSender
+
+local function startNotificationListener()
+	local conns = {}
+	local remote = getNotificationRemote()
+	if remote then
+		conns[#conns + 1] = remote.OnClientEvent:Connect(onAnnounceDebounced)
+		setStatus("● READY", "Notify remote mapped", "ok")
+		pushActivity("Notify remote OK", Theme.Green)
+	else
+		local rs = game:GetService("ReplicatedStorage")
+		local packages = rs:FindFirstChild("Packages")
+		local net = packages and packages:FindFirstChild("Net")
+		local n = 0
+		if net then
+			for _, child in ipairs(net:GetChildren()) do
+				if child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent") then
+					n = n + 1
+					conns[#conns + 1] = child.OnClientEvent:Connect(onAnnounceDebounced)
+					if n >= 200 then break end
+				end
+			end
+			conns[#conns + 1] = net.ChildAdded:Connect(function(child)
+				if child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent") then
+					conns[#conns + 1] = child.OnClientEvent:Connect(onAnnounceDebounced)
+				end
+			end)
+		end
+		if n > 0 then
+			setStatus("● READY", "Fallback notify (" .. n .. ")", "wait")
+			pushActivity("Fallback remotes: " .. n, Theme.Amber)
+		else
+			setStatus("⚠ NO REMOTE", "Notify not found", "err")
+			pushActivity("No notification remote", Theme.Amber)
+		end
+	end
+	task.spawn(function()
+		local pg = LP:WaitForChild("PlayerGui", 30)
+		if not pg then return end
+		pg.DescendantAdded:Connect(function(obj)
+			if obj:IsA("TextBox") and _isCodeBox(obj) then
+				_cachedBox = obj
+				if _G.AutoWriteEnabled and #pendingQueue > 0 then
+					triggerWrite()
+				end
+			end
+		end)
+	end)
+end
+
+_G.K2SniperResetInput = resetInput
+pcall(startNotificationListener)
+
+-- Settings → Announcements Test button (Luna TEST SENDER)
+task.defer(function()
+	local pg = LP:FindFirstChildOfClass("PlayerGui")
+	if not pg then return end
+	local gui = pg:FindFirstChild("K2CodeSniperV2") or pg:FindFirstChild("K2CodeSniper")
+	if not gui then return end
+	-- find settings page frame
+	local settingsPage = nil
+	for _, d in ipairs(gui:GetDescendants()) do
+		if d:IsA("Frame") and (d.Name == "SettingsPage" or d.Name == "Settings" or d.Name:lower():find("setting")) then
+			settingsPage = d
+			break
+		end
+	end
+	-- fallback: look for scroll in settings
+	if not settingsPage then
+		for _, d in ipairs(gui:GetDescendants()) do
+			if d:IsA("TextLabel") and tostring(d.Text):upper():find("SUBMIT AFTER") then
+				settingsPage = d.Parent
+				break
+			end
+		end
+	end
+	if not settingsPage then return end
+	if settingsPage:FindFirstChild("OpenTestSenderBtn") then return end
+	local btn = Instance.new("TextButton")
+	btn.Name = "OpenTestSenderBtn"
+	btn.Size = UDim2.new(1, -24, 0, 36)
+	btn.Position = UDim2.new(0, 12, 1, -48)
+	btn.BackgroundColor3 = Color3.fromRGB(40, 110, 220)
+	btn.Text = "ANNOUNCEMENTS TEST"
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 13
+	btn.AutoButtonColor = false
+	btn.BorderSizePixel = 0
+	btn.ZIndex = 50
+	btn.Parent = settingsPage
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = btn
+	btn.MouseButton1Click:Connect(function()
+		buildTestSender()
+	end)
+end)
+
+
+-- Auto buy / anchor (unchanged, light)
+local BUY_KW = { "buy", "purchase", "claim", "steal", "take", "get", "collect" }
+local function isBuyPrompt(p)
+	local t = string.lower(tostring(p.ActionText or "") .. " " .. tostring(p.ObjectText or "") .. " " .. p.Name)
+	if t:find("craft", 1, true) or t:find("sell", 1, true) then return false end
+	for _, k in ipairs(BUY_KW) do
+		if t:find(k, 1, true) then return true end
+	end
+	return false
+end
+local function wpos(inst)
+	local c = inst
+	for _ = 1, 12 do
+		if not c then break end
+		if c:IsA("BasePart") then return c.Position end
+		if c:IsA("Attachment") and c.Parent and c.Parent:IsA("BasePart") then return c.Parent.Position end
+		c = c.Parent
+	end
+end
+-- ProximityPrompt cache without workspace:GetDescendants (no load freeze)
+local _promptCache = {}
+pcall(function()
+	local PPS = game:GetService("ProximityPromptService")
+	-- index existing prompts via service events only after join
+	workspace.DescendantAdded:Connect(function(v)
+		if v:IsA("ProximityPrompt") then _promptCache[v] = true end
+	end)
+	workspace.DescendantRemoving:Connect(function(v)
+		_promptCache[v] = nil
+	end)
+	-- light deferred scan (chunked) so first join doesn't hitch
+	task.spawn(function()
+		local list = workspace:GetDescendants()
+		local i = 1
+		while i <= #list do
+			local v = list[i]
+			if v and v:IsA("ProximityPrompt") then _promptCache[v] = true end
+			i = i + 1
+			if i % 200 == 0 then task.wait() end
+		end
+	end)
+end)
+task.spawn(function()
+	while task.wait(1.0) do
+		if _G.AutoBuyEnabled then
+			local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				local hpos = hrp.Position
+				for v in pairs(_promptCache) do
+					if not v.Parent then
+						_promptCache[v] = nil
+					elseif v.Enabled and isBuyPrompt(v) then
+						local pos = wpos(v)
+						if pos and (hpos - pos).Magnitude <= 10 then
+							pcall(function()
+								v.HoldDuration = 0
+								if fireproximityprompt then fireproximityprompt(v)
+								else v:InputHoldBegin() task.wait(0.02) v:InputHoldEnd() end
+							end)
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+local _lastAnchor = nil
+task.spawn(function()
+	while task.wait(1.0) do
+		local a = _G.AnchorEnabled == true
+		if a ~= _lastAnchor then
+			_lastAnchor = a
+			local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then hrp.Anchored = a end
+		end
+	end
+end)
+LP.CharacterAdded:Connect(function(char)
+	task.wait(0.1)
+	if _G.AnchorEnabled then
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		if hrp then hrp.Anchored = true end
+	end
+end)
+
+------------------------------------------------------------
+-- GUI (SMALL 290x385)
+------------------------------------------------------------
+pcall(function()
+	for _, n in ipairs({ "K2CodeSniperUI", "K2CodeSniperV2" }) do
+		local p = game.CoreGui:FindFirstChild(n) or LP.PlayerGui:FindFirstChild(n)
+		if p then p:Destroy() end
+	end
+end)
+
+
+-- ============================================================
+-- K2 CODE SNIPER — DUELS-CLASS ADAPTIVE GLASS GUI (visual only)
+-- ============================================================
+local PANEL_W, PANEL_H = 262, 368
+
+local BG_URLS = {
+	"rbxassetid://15230369613", -- Halloween (default)
+	"https://files.catbox.moe/a3ypd8.jpg", -- sakura
+	"https://files.catbox.moe/5j8ga6.jpg", -- warm floral
+	"https://files.catbox.moe/om9irg.png", -- ice
+	"https://files.catbox.moe/mw3stx.jpg", -- blue
+	"https://files.catbox.moe/dgev5r.jpg", -- purple
+	"https://files.catbox.moe/6jh0ge.jpg", -- green
+	"https://files.catbox.moe/87erl9.png", -- dark
+	"https://files.catbox.moe/alsa0o.jpg", -- amber
+}
+
+local function rgb(r,g,b) return Color3.fromRGB(r,g,b) end
+local PRESETS = {
+	{ name="Halloween", bg=rgb(12,8,16), top=rgb(36,18,10), side=rgb(10,6,12), panel=rgb(32,16,12), hover=rgb(55,28,14),
+	  border=rgb(255,120,30), accent=rgb(255,140,40), accent2=rgb(255,90,20), text=rgb(255,245,230),
+	  muted=rgb(200,160,120), contrast=rgb(12,8,16), imgT=0.42, shadeT=0.34 },
+	{ name="Grey", bg=rgb(10,10,12), top=rgb(28,28,32), side=rgb(8,8,10), panel=rgb(24,24,28), hover=rgb(40,40,46),
+	  border=rgb(160,160,170), accent=rgb(210,210,220), accent2=rgb(140,140,150), text=rgb(245,245,250),
+	  muted=rgb(150,150,160), contrast=rgb(10,10,12), imgT=0.48, shadeT=0.40 },
+	{ name="Sakura", bg=rgb(13,11,15), top=rgb(40,22,38), side=rgb(12,8,14), panel=rgb(36,20,34), hover=rgb(55,30,50),
+	  border=rgb(180,60,120), accent=rgb(255,74,177), accent2=rgb(255,120,190), text=rgb(255,245,250),
+	  muted=rgb(194,155,180), contrast=rgb(13,11,15), imgT=0.48, shadeT=0.38 },
+	{ name="Warm", bg=rgb(14,10,12), top=rgb(38,22,28), side=rgb(12,8,10), panel=rgb(36,22,28), hover=rgb(52,32,38),
+	  border=rgb(170,80,110), accent=rgb(255,100,160), accent2=rgb(230,90,140), text=rgb(255,242,248),
+	  muted=rgb(190,150,165), contrast=rgb(14,10,12), imgT=0.50, shadeT=0.40 },
+	{ name="Ice", bg=rgb(8,12,22), top=rgb(18,28,44), side=rgb(6,10,18), panel=rgb(22,34,54), hover=rgb(38,55,80),
+	  border=rgb(120,180,230), accent=rgb(185,225,255), accent2=rgb(120,190,235), text=rgb(235,245,255),
+	  muted=rgb(140,170,195), contrast=rgb(8,12,22), imgT=0.52, shadeT=0.36 },
+	{ name="Ocean", bg=rgb(6,10,22), top=rgb(14,24,48), side=rgb(4,8,18), panel=rgb(16,28,52), hover=rgb(28,48,78),
+	  border=rgb(80,140,220), accent=rgb(90,180,255), accent2=rgb(60,140,220), text=rgb(230,240,255),
+	  muted=rgb(120,150,190), contrast=rgb(6,10,22), imgT=0.52, shadeT=0.38 },
+	{ name="Violet", bg=rgb(14,10,22), top=rgb(30,20,48), side=rgb(10,8,18), panel=rgb(34,24,54), hover=rgb(50,36,72),
+	  border=rgb(150,100,220), accent=rgb(180,120,255), accent2=rgb(220,140,255), text=rgb(245,238,255),
+	  muted=rgb(170,150,200), contrast=rgb(14,10,22), imgT=0.50, shadeT=0.40 },
+	{ name="Jade", bg=rgb(8,16,12), top=rgb(16,32,24), side=rgb(6,12,10), panel=rgb(20,40,30), hover=rgb(32,58,44),
+	  border=rgb(80,180,130), accent=rgb(100,230,170), accent2=rgb(70,190,140), text=rgb(235,255,245),
+	  muted=rgb(140,180,160), contrast=rgb(8,16,12), imgT=0.52, shadeT=0.38 },
+	{ name="Noir", bg=rgb(8,8,12), top=rgb(22,22,30), side=rgb(6,6,10), panel=rgb(26,26,36), hover=rgb(40,40,54),
+	  border=rgb(160,170,200), accent=rgb(220,230,255), accent2=rgb(140,160,200), text=rgb(245,248,255),
+	  muted=rgb(150,155,175), contrast=rgb(8,8,12), imgT=0.46, shadeT=0.42 },
+	{ name="Amber", bg=rgb(16,12,8), top=rgb(36,26,14), side=rgb(12,10,6), panel=rgb(40,28,16), hover=rgb(58,42,24),
+	  border=rgb(200,140,60), accent=rgb(255,180,80), accent2=rgb(230,150,60), text=rgb(255,248,235),
+	  muted=rgb(190,165,130), contrast=rgb(16,12,8), imgT=0.50, shadeT=0.40 },
+	{ name="Lavender", bg=rgb(14,12,20), top=rgb(30,24,42), side=rgb(10,10,16), panel=rgb(34,28,48), hover=rgb(50,42,68),
+	  border=rgb(160,130,210), accent=rgb(200,160,255), accent2=rgb(230,180,255), text=rgb(248,242,255),
+	  muted=rgb(170,155,195), contrast=rgb(14,12,20), imgT=0.50, shadeT=0.38 },
+}
+
+local bgIndex = 1
+local themeRegistry = {} -- {obj, prop, keyOrFn}
+local toggleRegistry = {} -- {track, knob, stroke, grad, getState, paint, fill, lbl}
+local segmentRegistry = {} -- Type Speed etc.
+
+local function register(obj, prop, key)
+	if obj then table.insert(themeRegistry, {obj=obj, prop=prop, key=key}) end
+end
+
+local function loadThemeInto(p)
+	Theme.Void, Theme.Panel, Theme.PanelSoft = p.bg, p.panel, p.top
+	Theme.Card, Theme.Cyan, Theme.Teal = p.panel, p.accent, p.accent2
+	Theme.Violet, Theme.Text, Theme.Muted = p.accent2, p.text, p.muted
+	Theme.ToggleOff, Theme.Border = p.side, p.border
+	Theme.Accent, Theme.Accent2, Theme.Hover = p.accent, p.accent2, p.hover
+	Theme.Contrast, Theme.Top, Theme.Side = p.contrast, p.top, p.side
+end
+loadThemeInto(PRESETS[1])
+
+local TTHEME = TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+local function tw(obj, props, info)
+	if not obj or not obj.Parent then return end
+	pcall(function() TS:Create(obj, info or TTHEME, props):Play() end)
+end
+
+local function resolveBg(url, idx)
+	if type(getcustomasset) ~= "function" then return nil end
+	local folder = "k2_sniper_bg"
+	pcall(function()
+		local mf = makefolder or (syn and syn.makefolder)
+		if mf then pcall(mf, folder) end
+	end)
+	local ext = (url:find("%.png") and ".png") or ".jpg"
+	local fname = folder .. "/bg" .. tostring(idx) .. ext
+	local has = false
+	pcall(function() if isfile and isfile(fname) then has = true end end)
+	if not has then
+		local ok, data = pcall(function() return game:HttpGet(url) end)
+		if ok and type(data) == "string" and #data > 500 then
+			pcall(function()
+				local wf = writefile or (syn and syn.writefile)
+				if wf then wf(fname, data) end
+			end)
+		end
+	end
+	local ok2, asset = pcall(function() return getcustomasset(fname) end)
+	if ok2 and type(asset) == "string" and asset ~= "" then return asset end
+	return nil
+end
+
+-- refs filled during build
+local refs = {}
+
+local function applyMood(idx, instant)
+	idx = ((idx - 1) % #PRESETS) + 1
+	bgIndex = idx
+	local p = PRESETS[idx]
+	loadThemeInto(p)
+
+	local function set(obj, prop, val)
+		if not obj or not obj.Parent then return end
+		if instant then pcall(function() obj[prop] = val end)
+		else tw(obj, {[prop]=val}) end
+	end
+
+	for _, e in ipairs(themeRegistry) do
+		local val = Theme[e.key]
+		if val ~= nil then set(e.obj, e.prop, val) end
+	end
+
+	-- toggles: refresh on/off colors from live Theme (LTM pills + legacy)
+	for _, t in ipairs(toggleRegistry) do
+		local on = t.getState and t.getState()
+		if type(t.paint) == "function" then
+			pcall(t.paint)
+		else
+			if t.fill then
+				set(t.fill, "BackgroundColor3", on and Color3.fromRGB(255,255,255) or Theme.ToggleOff)
+			end
+			if t.track then
+				set(t.track, "BackgroundColor3", on and Theme.Cyan or Theme.ToggleOff)
+			end
+			if t.stroke or t.edge then
+				local st = t.stroke or t.edge
+				set(st, "Color", on and Theme.Accent2 or Theme.Border)
+				pcall(function() st.Transparency = on and 0.45 or 0.3 end)
+			end
+			if t.knob then
+				set(t.knob, "BackgroundColor3", on and Theme.Contrast or Theme.Muted)
+			end
+			if t.lbl then
+				set(t.lbl, "TextColor3", on and Theme.Text or Theme.Muted)
+			end
+			if t.grad then
+				pcall(function()
+					t.grad.Enabled = on and true or false
+					t.grad.Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Theme.Accent2),
+						ColorSequenceKeypoint.new(0.55, Theme.Accent),
+						ColorSequenceKeypoint.new(1, Theme.Accent2),
+					})
+				end)
+			end
+			if t.cardStroke then
+				pcall(function()
+					t.cardStroke.Color = Theme.Border
+					t.cardStroke.Transparency = on and 0.35 or 0.55
+				end)
+			end
+		end
+	end
+
+	-- segmented buttons (Type Speed etc.)
+	if type(segmentRegistry) == "table" then
+		for _, seg in ipairs(segmentRegistry) do
+			if type(seg.refresh) == "function" then pcall(seg.refresh) end
+		end
+	end
+
+	-- Halloween-only visuals
+	local isHall = (p.name == "Halloween")
+	if refs.logoTxt then
+		refs.logoTxt.Text = isHall and "🎃" or "K2"
+	end
+	if refs.titleLbl then
+		local base = "K2 Code Sniper"
+		refs.titleLbl.Text = isHall and ("🎃 " .. base) or base
+	end
+	if refs.particleLayer then
+		refs.particleLayer.Visible = isHall
+	end
+
+	if refs.mainStroke then set(refs.mainStroke, "Color", Theme.Border) end
+	if refs.mainGrad then
+		pcall(function()
+			refs.mainGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Top),
+				ColorSequenceKeypoint.new(0.5, Theme.Panel),
+				ColorSequenceKeypoint.new(1, Theme.Side),
+			})
+		end)
+	end
+	if refs.borderGrad then
+		pcall(function()
+			refs.borderGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.shade then
+		set(refs.shade, "BackgroundColor3", Theme.Void)
+		if instant then refs.shade.BackgroundTransparency = p.shadeT
+		else tw(refs.shade, {BackgroundTransparency = p.shadeT}) end
+	end
+	if refs.bg then
+		if instant then refs.bg.ImageTransparency = p.imgT
+		else tw(refs.bg, {ImageTransparency = p.imgT}) end
+	end
+	if refs.glass then set(refs.glass, "BackgroundColor3", Theme.Panel) end
+	if refs.moodLabel then
+		refs.moodLabel.Text = p.name
+		set(refs.moodLabel, "TextColor3", Theme.Cyan)
+	end
+	if refs.logoGrad then
+		pcall(function()
+			refs.logoGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.titleUnderlineGrad then
+		pcall(function()
+			refs.titleUnderlineGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.ambientGlowGrad then
+		pcall(function()
+			refs.ambientGlowGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.resetGrad then
+		pcall(function()
+			refs.resetGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.submitGrad then
+		pcall(function()
+			refs.submitGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(0.5, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+	if refs.minGrad then
+		pcall(function()
+			refs.minGrad.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent),
+				ColorSequenceKeypoint.new(1, Theme.Accent2),
+			})
+		end)
+	end
+end
+
+_G.K2SniperCycleBg = function()
+	local nextI = bgIndex + 1
+	_G.K2SniperBgIndex = ((nextI - 1) % #PRESETS) + 1
+	if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
+	if refs.bg then tw(refs.bg, {ImageTransparency = 0.92}, TweenInfo.new(0.15)) end
+	if refs.shade then tw(refs.shade, {BackgroundTransparency = 0.12}, TweenInfo.new(0.15)) end
+	task.delay(0.18, function()
+		task.spawn(function()
+			local i = ((nextI - 1) % #BG_URLS) + 1
+			local asset = resolveBg(BG_URLS[i], i)
+			if refs.bg then
+				if asset then refs.bg.Image = asset; refs.bg.Visible = true
+				else refs.bg.Visible = false end
+			end
+		end)
+		applyMood(nextI, false)
+	end)
+end
+
+
+local function K2BuildUI()
+-- ========== ScreenGui ==========
+ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "K2CodeSniperV2"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 1000
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+do
+	local parented = false
+	pcall(function()
+		if gethui then ScreenGui.Parent = gethui(); parented = ScreenGui.Parent ~= nil end
+	end)
+	if not parented then
+		pcall(function()
+			if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+			ScreenGui.Parent = game:GetService("CoreGui")
+			parented = ScreenGui.Parent ~= nil
+		end)
+	end
+	if not parented then
+		pcall(function()
+			local pg = LP and (LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5))
+			if pg then ScreenGui.Parent = pg end
+		end)
+	end
+	getgenv().K2CodeSniperGui = ScreenGui
+end
+
+-- ========== MAIN FRAME (Duels layered glass) ==========
+MainFrame = Instance.new("Frame")
+MainFrame.Name = "Main"
+MainFrame.AnchorPoint = Vector2.new(1, 0)
+MainFrame.Position = UDim2.new(1, -16, 0, 16)
+MainFrame.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+MainFrame.BackgroundColor3 = Theme.Panel
+MainFrame.BackgroundTransparency = 0.16
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.Visible = false
+MainFrame.ZIndex = 10
+MainFrame.Parent = ScreenGui
+corner(MainFrame, 16)
+register(MainFrame, "BackgroundColor3", "Panel")
+
+-- shadow
+do
+	local sh = Instance.new("ImageLabel")
+	sh.Name = "Shadow"
+	sh.AnchorPoint = Vector2.new(0.5, 0.5)
+	sh.Position = UDim2.fromScale(0.5, 0.52)
+	sh.Size = UDim2.new(1, 36, 1, 36)
+	sh.BackgroundTransparency = 1
+	sh.Image = "rbxassetid://5028857084"
+	sh.ImageColor3 = Color3.new(0,0,0)
+	sh.ImageTransparency = 0.5
+	sh.ScaleType = Enum.ScaleType.Slice
+	sh.SliceCenter = Rect.new(24,24,276,276)
+	sh.ZIndex = 9
+	sh.Parent = MainFrame
+end
+
+refs.bg = Instance.new("ImageLabel")
+refs.bg.Name = "SelectedBackground"
+refs.bg.Size = UDim2.fromScale(1,1)
+refs.bg.BackgroundTransparency = 1
+refs.bg.BorderSizePixel = 0
+refs.bg.ScaleType = Enum.ScaleType.Crop
+refs.bg.ImageTransparency = 0.48
+refs.bg.ZIndex = 10
+refs.bg.Parent = MainFrame
+corner(refs.bg, 16)
+
+refs.shade = Instance.new("Frame")
+refs.shade.Name = "BgShade"
+refs.shade.Size = UDim2.fromScale(1,1)
+refs.shade.BackgroundColor3 = Theme.Void
+refs.shade.BackgroundTransparency = 0.38
+refs.shade.BorderSizePixel = 0
+refs.shade.ZIndex = 10
+refs.shade.Parent = MainFrame
+corner(refs.shade, 16)
+
+refs.glass = Instance.new("Frame")
+refs.glass.Name = "Glass"
+refs.glass.Size = UDim2.fromScale(1,1)
+refs.glass.BackgroundColor3 = Theme.Panel
+refs.glass.BackgroundTransparency = 0.58
+refs.glass.BorderSizePixel = 0
+refs.glass.ZIndex = 10
+refs.glass.Parent = MainFrame
+corner(refs.glass, 16)
+refs.mainGrad = Instance.new("UIGradient")
+refs.mainGrad.Rotation = 118
+refs.mainGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Theme.Top),
+	ColorSequenceKeypoint.new(0.5, Theme.Panel),
+	ColorSequenceKeypoint.new(1, Theme.Side),
+})
+refs.mainGrad.Parent = refs.glass
+
+refs.mainStroke = stroke(MainFrame, Theme.Border, 1.2, 0.35)
+refs.borderGrad = Instance.new("UIGradient")
+refs.borderGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Theme.Accent2),
+	ColorSequenceKeypoint.new(0.5, Theme.Accent),
+	ColorSequenceKeypoint.new(1, Theme.Accent2),
+})
+refs.borderGrad.Parent = refs.mainStroke
+
+-- ========== HEADER ==========
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 48)
+Header.BackgroundColor3 = Theme.Top
+Header.BackgroundTransparency = 0.45
+Header.BorderSizePixel = 0
+Header.ZIndex = 12
+Header.Parent = MainFrame
+corner(Header, 16)
+register(Header, "BackgroundColor3", "Top")
+-- square off bottom of header corners
+do
+	local cover = Instance.new("Frame")
+	cover.Size = UDim2.new(1,0,0,16)
+	cover.Position = UDim2.new(0,0,1,-16)
+	cover.BackgroundColor3 = Theme.Top
+	cover.BackgroundTransparency = 0.45
+	cover.BorderSizePixel = 0
+	cover.ZIndex = 12
+	cover.Parent = Header
+	register(cover, "BackgroundColor3", "Top")
+end
+
+-- Ambient glow (Duels ModernAmbientGlow)
+local ambientGlow = Instance.new("Frame")
+ambientGlow.Name = "ModernAmbientGlow"
+ambientGlow.Size = UDim2.fromOffset(160, 70)
+ambientGlow.Position = UDim2.new(1, -130, 0, -40)
+ambientGlow.BackgroundColor3 = Theme.Cyan
+ambientGlow.BackgroundTransparency = 0.82
+ambientGlow.BorderSizePixel = 0
+ambientGlow.ZIndex = 12
+ambientGlow.Parent = Header
+corner(ambientGlow, 80)
+register(ambientGlow, "BackgroundColor3", "Cyan")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 18
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(0.5, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.48, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	g.Parent = ambientGlow
+	refs.ambientGlowGrad = g
+end
+
+-- K2 square badge (Duels-style)
+local Logo = Instance.new("Frame")
+Logo.Name = "K2Badge"
+Logo.Size = UDim2.fromOffset(32, 32)
+Logo.Position = UDim2.fromOffset(12, 10)
+Logo.BackgroundColor3 = Theme.Cyan
+Logo.BackgroundTransparency = 0.08
+Logo.BorderSizePixel = 0
+Logo.ZIndex = 13
+Logo.Active = true
+Logo.Parent = Header
+corner(Logo, 12)
+local logoStroke = stroke(Logo, Theme.Accent2, 0.9, 0.25)
+register(Logo, "BackgroundColor3", "Cyan")
+register(logoStroke, "Color", "Accent2")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 35
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Parent = Logo
+	refs.logoGrad = g
+end
+local LogoTxt = Instance.new("TextLabel")
+LogoTxt.Size = UDim2.fromScale(1, 1)
+LogoTxt.BackgroundTransparency = 1
+LogoTxt.Text = "🎃"
+	refs.logoTxt = LogoTxt
+LogoTxt.TextSize = 12
+LogoTxt.Font = Enum.Font.GothamBlack
+LogoTxt.TextColor3 = Theme.Contrast
+LogoTxt.ZIndex = 14
+LogoTxt.Parent = Logo
+register(LogoTxt, "TextColor3", "Contrast")
+
+-- Title: K2 Code Sniper (GothamBlack / K2 Winter)
+local Title = Instance.new("TextLabel")
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.fromOffset(52, 8)
+Title.Size = UDim2.new(1, -140, 0, 18)
+Title.Font = Enum.Font.GothamBlack
+Title.Text = "🎃 K2 Code Sniper"
+refs.titleLbl = Title
+Title.TextSize = 14
+Title.TextColor3 = Theme.Text
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.TextYAlignment = Enum.TextYAlignment.Center
+Title.ZIndex = 13
+Title.Parent = Header
+register(Title, "TextColor3", "Text")
+
+-- Subtitle
+local Subtitle = Instance.new("TextLabel")
+Subtitle.BackgroundTransparency = 1
+Subtitle.Position = UDim2.fromOffset(52, 26)
+Subtitle.Size = UDim2.new(1, -140, 0, 12)
+Subtitle.Font = Enum.Font.GothamBold
+Subtitle.Text = "discord.gg/k2scripts"
+Subtitle.TextSize = 9
+Subtitle.TextColor3 = Theme.Cyan
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.ZIndex = 13
+Subtitle.Parent = Header
+register(Subtitle, "TextColor3", "Cyan")
+
+-- Glowy accent underline under title (Duels ModernHeaderAccent)
+local titleUnderline = Instance.new("Frame")
+titleUnderline.Name = "ModernHeaderAccent"
+titleUnderline.Size = UDim2.fromOffset(72, 2)
+titleUnderline.Position = UDim2.fromOffset(52, 42)
+titleUnderline.BackgroundColor3 = Theme.Cyan
+titleUnderline.BackgroundTransparency = 0.05
+titleUnderline.BorderSizePixel = 0
+titleUnderline.ZIndex = 13
+titleUnderline.Parent = Header
+corner(titleUnderline, 2)
+register(titleUnderline, "BackgroundColor3", "Cyan")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 0
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(0.5, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	g.Parent = titleUnderline
+	refs.titleUnderlineGrad = g
+end
+-- soft glow bar under the underline
+local titleGlowBar = Instance.new("Frame")
+titleGlowBar.Size = UDim2.fromOffset(90, 6)
+titleGlowBar.Position = UDim2.fromOffset(44, 40)
+titleGlowBar.BackgroundColor3 = Theme.Cyan
+titleGlowBar.BackgroundTransparency = 0.78
+titleGlowBar.BorderSizePixel = 0
+titleGlowBar.ZIndex = 12
+titleGlowBar.Parent = Header
+corner(titleGlowBar, 3)
+register(titleGlowBar, "BackgroundColor3", "Cyan")
+
+local function winBtn(x, sym, isClose)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(22, 22)
+	b.Position = UDim2.new(1, x, 0, 15)
+	b.BackgroundColor3 = Theme.Panel
+	b.BackgroundTransparency = 0.35
+	b.Text = sym
+	b.Font = FT
+	b.TextSize = 12
+	b.TextColor3 = Theme.Muted
+	b.AutoButtonColor = false
+	b.ZIndex = 14
+	b.Parent = Header
+	corner(b, 8)
+	local st = stroke(b, Theme.Border, 0.8, 0.5)
+	register(b, "BackgroundColor3", "Panel")
+	register(b, "TextColor3", "Muted")
+	register(st, "Color", "Border")
+	b.MouseEnter:Connect(function()
+		tw(b, {BackgroundTransparency = 0.1, TextColor3 = isClose and Theme.Red or Theme.Cyan}, TIS)
+	end)
+	b.MouseLeave:Connect(function()
+		tw(b, {BackgroundTransparency = 0.35, TextColor3 = Theme.Muted}, TIS)
+	end)
+	return b
+end
+-- Minimize = themed K2 square (matches badge)
+local MinBtn = Instance.new("TextButton")
+MinBtn.Name = "MinK2"
+MinBtn.Size = UDim2.fromOffset(22, 22)
+MinBtn.Position = UDim2.new(1, -78, 0, 13)
+MinBtn.BackgroundColor3 = Theme.Cyan
+MinBtn.BackgroundTransparency = 0.08
+MinBtn.Text = "K2"
+MinBtn.Font = Enum.Font.GothamBlack
+MinBtn.TextSize = 8
+MinBtn.TextColor3 = Theme.Contrast
+MinBtn.AutoButtonColor = false
+MinBtn.ZIndex = 14
+MinBtn.Parent = Header
+corner(MinBtn, 7)
+local minSt = stroke(MinBtn, Theme.Accent2, 0.85, 0.3)
+register(MinBtn, "BackgroundColor3", "Cyan")
+register(MinBtn, "TextColor3", "Contrast")
+register(minSt, "Color", "Accent2")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 35
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Parent = MinBtn
+	refs.minGrad = g
+end
+MinBtn.MouseEnter:Connect(function()
+	tw(MinBtn, {BackgroundTransparency = 0}, TIS)
+end)
+MinBtn.MouseLeave:Connect(function()
+	tw(MinBtn, {BackgroundTransparency = 0.08}, TIS)
+end)
+
+local BgBtn = winBtn(-52, "⌂", false)
+local CloseBtn = winBtn(-26, "×", true)
+BgBtn.MouseButton1Click:Connect(function()
+	if _G.K2SniperCycleBg then _G.K2SniperCycleBg() end
+end)
+CloseBtn.MouseButton1Click:Connect(function()
+	_G.ScriptEnabled = false
+	if ScreenGui then ScreenGui:Destroy() end
+	getgenv().K2CodeSniperV2 = nil
+	getgenv().K2CodeSniperGui = nil
+end)
+
+refs.moodLabel = Instance.new("TextLabel")
+refs.moodLabel.BackgroundTransparency = 1
+refs.moodLabel.Position = UDim2.new(1, -110, 0, 36)
+refs.moodLabel.Size = UDim2.fromOffset(80, 12)
+refs.moodLabel.Font = FB
+refs.moodLabel.Text = "Sakura"
+refs.moodLabel.TextSize = 8
+refs.moodLabel.TextColor3 = Theme.Cyan
+refs.moodLabel.TextXAlignment = Enum.TextXAlignment.Right
+refs.moodLabel.ZIndex = 13
+refs.moodLabel.Parent = Header
+
+-- ========== CONTENT ==========
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -16, 1, -100)
+Content.Position = UDim2.fromOffset(8, 52)
+Content.BackgroundTransparency = 1
+Content.ClipsDescendants = true
+Content.ZIndex = 12
+Content.Parent = MainFrame
+
+local PageMain = Instance.new("ScrollingFrame")
+PageMain.Size = UDim2.fromScale(1,1)
+PageMain.BackgroundTransparency = 1
+PageMain.BorderSizePixel = 0
+PageMain.ScrollBarThickness = 2
+PageMain.ScrollBarImageColor3 = Theme.Cyan
+PageMain.CanvasSize = UDim2.new(0,0,0, 420)
+PageMain.ClipsDescendants = true
+PageMain.ZIndex = 12
+PageMain.Parent = Content
+register(PageMain, "ScrollBarImageColor3", "Cyan")
+
+local PageSettings = Instance.new("ScrollingFrame")
+PageSettings.Size = UDim2.fromScale(1,1)
+PageSettings.BackgroundTransparency = 1
+PageSettings.BorderSizePixel = 0
+PageSettings.Visible = false
+PageSettings.ScrollBarThickness = 3
+PageSettings.ScrollBarImageColor3 = Theme.Cyan
+PageSettings.CanvasSize = UDim2.new(0,0,0, 980)
+PageSettings.ZIndex = 12
+PageSettings.Parent = Content
+register(PageSettings, "ScrollBarImageColor3", "Cyan")
+
+-- Status card
+local StatusCard = Instance.new("Frame")
+StatusCard.Size = UDim2.new(1, 0, 0, 56)
+StatusCard.Position = UDim2.fromOffset(0, 2)
+StatusCard.BackgroundColor3 = Theme.Card
+StatusCard.BackgroundTransparency = 0.28
+StatusCard.BorderSizePixel = 0
+StatusCard.ZIndex = 13
+StatusCard.Parent = PageMain
+corner(StatusCard, 12)
+local scStroke = stroke(StatusCard, Theme.Border, 1, 0.45)
+register(StatusCard, "BackgroundColor3", "Card")
+register(scStroke, "Color", "Border")
+
+StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.fromOffset(8, 8)
+StatusDot.Position = UDim2.fromOffset(12, 14)
+StatusDot.BackgroundColor3 = Theme.Cyan
+StatusDot.BorderSizePixel = 0
+StatusDot.ZIndex = 14
+StatusDot.Parent = StatusCard
+corner(StatusDot, 4)
+register(StatusDot, "BackgroundColor3", "Cyan")
+
+StatusTitle = Instance.new("TextLabel")
+StatusTitle.BackgroundTransparency = 1
+StatusTitle.Position = UDim2.fromOffset(26, 10)
+StatusTitle.Size = UDim2.new(1, -36, 0, 14)
+StatusTitle.Font = Enum.Font.GothamBlack
+StatusTitle.Text = "● ONLINE"
+StatusTitle.TextSize = 11
+StatusTitle.TextColor3 = Theme.Text
+StatusTitle.TextXAlignment = Enum.TextXAlignment.Left
+StatusTitle.ZIndex = 14
+StatusTitle.Parent = StatusCard
+register(StatusTitle, "TextColor3", "Text")
+
+StatusSub = Instance.new("TextLabel")
+StatusSub.BackgroundTransparency = 1
+StatusSub.Position = UDim2.fromOffset(12, 28)
+StatusSub.Size = UDim2.new(1, -24, 0, 12)
+StatusSub.Font = FM
+StatusSub.Text = "Waiting for trigger"
+StatusSub.TextSize = 9
+StatusSub.TextTruncate = Enum.TextTruncate.AtEnd
+StatusSub.TextColor3 = Theme.Muted
+StatusSub.TextXAlignment = Enum.TextXAlignment.Left
+StatusSub.ZIndex = 14
+StatusSub.Parent = StatusCard
+register(StatusSub, "TextColor3", "Muted")
+
+local function metric(xOff, label, isQ)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Position = UDim2.fromOffset(xOff, 38)
+	l.Size = UDim2.fromOffset(44, 12)
+	l.Font = Enum.Font.GothamBold
+	l.Text = label
+	l.TextSize = 8
+	l.TextColor3 = Theme.Muted
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.ZIndex = 14
+	l.Parent = StatusCard
+	register(l, "TextColor3", "Muted")
+	local v = Instance.new("TextLabel")
+	v.BackgroundTransparency = 1
+	v.Position = UDim2.fromOffset(xOff + 40, 38)
+	v.Size = UDim2.fromOffset(36, 12)
+	v.Font = Enum.Font.GothamBlack
+	v.Text = "0"
+	v.TextSize = 9
+	v.TextColor3 = Theme.Cyan
+	v.TextXAlignment = Enum.TextXAlignment.Left
+	v.ZIndex = 14
+	v.Parent = StatusCard
+	register(v, "TextColor3", "Cyan")
+	if isQ then QueueLabel = v else CollectedLabel = v end
+end
+metric(12, "QUEUE", true)
+metric(120, "HELD", false)
+
+-- Duels-style card toggle
+local function makeCardToggle(parent, y, icon, title, desc, initial, cb)
+	-- LTM-style row + ON/OFF pill (gloss, gradient, ripple)
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, 0, 0, 44)
+	card.Position = UDim2.fromOffset(0, y)
+	card.BackgroundColor3 = Theme.Card
+	card.BackgroundTransparency = 0.12
+	card.BorderSizePixel = 0
+	card.ZIndex = 13
+	card.Parent = parent
+	corner(card, 10)
+	local st = stroke(card, Theme.Border, 1, 0.55)
+	register(card, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+	local rowGrad = Instance.new("UIGradient")
+	rowGrad.Rotation = 90
+	rowGrad.Color = ColorSequence.new(Color3.fromRGB(255,255,255), Color3.fromRGB(190,184,214))
+	rowGrad.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.92),
+		NumberSequenceKeypoint.new(1, 0.97),
+	})
+	rowGrad.Parent = card
+
+	local ic = Instance.new("TextLabel")
+	ic.BackgroundTransparency = 1
+	ic.Position = UDim2.fromOffset(12, desc and 7 or 0)
+	ic.Size = UDim2.new(1, -84, desc and 0 or 1, desc and 16 or 0)
+	ic.Font = Enum.Font.GothamBold
+	ic.Text = (icon and (icon .. "  ") or "") .. title
+	ic.TextSize = 12
+	ic.TextColor3 = Theme.Text
+	ic.TextXAlignment = Enum.TextXAlignment.Left
+	ic.TextTruncate = Enum.TextTruncate.AtEnd
+	ic.ZIndex = 14
+	ic.Parent = card
+	register(ic, "TextColor3", "Text")
+
+	if desc and desc ~= "" then
+		local ds = Instance.new("TextLabel")
+		ds.BackgroundTransparency = 1
+		ds.Position = UDim2.fromOffset(12, 24)
+		ds.Size = UDim2.new(1, -84, 0, 13)
+		ds.Font = FM
+		ds.Text = desc
+		ds.TextSize = 10
+		ds.TextColor3 = Theme.Muted
+		ds.TextXAlignment = Enum.TextXAlignment.Left
+		ds.TextTruncate = Enum.TextTruncate.AtEnd
+		ds.ZIndex = 14
+		ds.Parent = card
+		register(ds, "TextColor3", "Muted")
+	end
+
+	-- LTM ON/OFF pill
+	local b = Instance.new("TextButton")
+	b.Text = ""
+	b.AutoButtonColor = false
+	b.BackgroundTransparency = 1
+	b.BorderSizePixel = 0
+	b.Size = UDim2.fromOffset(62, 26)
+	b.AnchorPoint = Vector2.new(1, 0.5)
+	b.Position = UDim2.new(1, -12, 0.5, 0)
+	b.ZIndex = 15
+	b.Parent = card
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.fromScale(1, 1)
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 15
+	fill.Parent = b
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = fill
+	local g = Instance.new("UIGradient")
+	g.Rotation = 0
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(1, Theme.Accent),
+	})
+	g.Parent = fill
+	local edge = Instance.new("UIStroke")
+	edge.Thickness = 1
+	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	edge.Parent = fill
+
+	local gloss = Instance.new("Frame")
+	gloss.Size = UDim2.new(1, -4, 0.5, 0)
+	gloss.Position = UDim2.fromOffset(2, 1)
+	gloss.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	gloss.BorderSizePixel = 0
+	gloss.ZIndex = 16
+	gloss.Parent = b
+	local glossCorner = Instance.new("UICorner")
+	glossCorner.CornerRadius = UDim.new(1, 0)
+	glossCorner.Parent = gloss
+	local glossGrad = Instance.new("UIGradient")
+	glossGrad.Rotation = 90
+	glossGrad.Transparency = NumberSequence.new(0, 1)
+	glossGrad.Parent = gloss
+
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.fromScale(1, 1)
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextSize = 11
+	lbl.TextXAlignment = Enum.TextXAlignment.Center
+	lbl.ZIndex = 17
+	lbl.Parent = b
+
+	local sc = Instance.new("UIScale")
+	sc.Parent = b
+
+	local state = initial == true
+	local function paint()
+		-- ON uses theme accent gradient; OFF uses ToggleOff
+		fill.BackgroundColor3 = state and Color3.fromRGB(255, 255, 255) or Theme.ToggleOff
+		g.Enabled = state
+		pcall(function()
+			g.Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Theme.Accent2),
+				ColorSequenceKeypoint.new(1, Theme.Accent),
+			})
+		end)
+		edge.Color = state and Theme.Accent2 or Theme.Border
+		edge.Transparency = state and 0.45 or 0.3
+		gloss.BackgroundTransparency = state and 0.8 or 0.93
+		lbl.Text = state and "ON" or "OFF"
+		lbl.TextColor3 = state and Theme.Text or Theme.Muted
+		st.Color = Theme.Border
+		st.Transparency = state and 0.35 or 0.55
+	end
+	paint()
+	table.insert(toggleRegistry, {
+		getState = function() return state end,
+		paint = paint,
+		fill = fill,
+		grad = g,
+		edge = edge,
+		lbl = lbl,
+		cardStroke = st,
+	})
+
+	local function ripple()
+		local r = Instance.new("Frame")
+		r.AnchorPoint = Vector2.new(0.5, 0.5)
+		r.Position = UDim2.fromScale(0.5, 0.5)
+		r.Size = UDim2.fromOffset(0, 0)
+		r.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		r.BackgroundTransparency = 0.55
+		r.BorderSizePixel = 0
+		r.ZIndex = 18
+		r.Parent = b
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(1, 0)
+		rc.Parent = r
+		local s = math.max(b.AbsoluteSize.X, b.AbsoluteSize.Y) * 1.6
+		local anim = TS:Create(r, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = UDim2.fromOffset(s, s),
+			BackgroundTransparency = 1,
+		})
+		anim.Completed:Connect(function() r:Destroy() end)
+		anim:Play()
+	end
+
+	b.MouseButton1Click:Connect(function()
+		state = not state
+		paint()
+		ripple()
+		sc.Scale = 0.9
+		TS:Create(sc, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		if cb then task.spawn(cb, state) end
+		if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
+	end)
+
+	card.MouseEnter:Connect(function()
+		tw(st, { Color = Theme.Accent, Transparency = 0.25 }, TIS)
+	end)
+	card.MouseLeave:Connect(function()
+		tw(st, { Color = Theme.Border, Transparency = state and 0.35 or 0.55 }, TIS)
+	end)
+	return card
+end
+
+
+makeCardToggle(PageMain, 64, "⚡", "AUTO WRITE", "Only after code / riddle trigger", _G.AutoWriteEnabled == true, function(s)
+	_G.AutoWriteEnabled = s
+	if not s then
+		table.clear(pendingQueue)
+		table.clear(pendingSeen)
+		clearArm()
+	end
+	pushActivity(s and "Write ON" or "Write OFF", Theme.Cyan)
+end)
+makeCardToggle(PageMain, 114, "◈", "AUTO SUBMIT", "Submit when count reached", _G.AutoSubmitEnabled == true, function(s)
+	_G.AutoSubmitEnabled = s
+	pushActivity(s and "Submit ON" or "Submit OFF", Theme.Teal)
+	pcall(k2SniperSaveConfig)
+end)
+makeCardToggle(PageMain, 164, "🔢", "AUTO REDEEM ON #", "Flush+submit when a word ends with 0-9", _G.AutoRedeemOnNumber == true, function(s)
+	_G.AutoRedeemOnNumber = s
+	pushActivity(s and "Redeem-on-# ON" or "Redeem-on-# OFF", Theme.Teal)
+	pcall(k2SniperSaveConfig)
+end)
+makeCardToggle(PageMain, 214, "🧠", "MANUAL RIDDLE", "Dictionary solve after riddle trigger", _G.RiddleSolverEnabled == true, function(s)
+	_G.RiddleSolverEnabled = s
+	if s then _G.AIRiddleEnabled = false end
+	if not s and captureMode == "riddle" then clearArm() end
+	pushActivity(s and "Manual Riddle ON" or "Manual Riddle OFF", Theme.Violet)
+end)
+makeCardToggle(PageMain, 264, "🤖", "AI RIDDLE", "Proxy AI solve (Riddler source)", _G.AIRiddleEnabled == true, function(s)
+	_G.AIRiddleEnabled = s
+	if s then _G.RiddleSolverEnabled = false end
+	if not s and captureMode == "ai_riddle" then clearArm() end
+	pushActivity(s and "AI Riddle ON" or "AI Riddle OFF", Theme.Violet)
+end)
+
+-- Reset Input (Duels glass button — adaptive accent)
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.new(1, 0, 0, 34)
+resetBtn.Position = UDim2.fromOffset(0, 314)
+resetBtn.BackgroundColor3 = Theme.Panel
+resetBtn.BackgroundTransparency = 0.22
+resetBtn.Text = ""
+resetBtn.AutoButtonColor = false
+resetBtn.ZIndex = 13
+resetBtn.Parent = PageMain
+corner(resetBtn, 11)
+local rst = stroke(resetBtn, Theme.Cyan, 1.1, 0.35)
+register(resetBtn, "BackgroundColor3", "Panel")
+register(rst, "Color", "Cyan")
+do
+	local g = Instance.new("UIGradient")
+	g.Rotation = 25
+	g.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Theme.Accent2),
+		ColorSequenceKeypoint.new(0.5, Theme.Accent),
+		ColorSequenceKeypoint.new(1, Theme.Accent2),
+	})
+	g.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.55),
+		NumberSequenceKeypoint.new(0.5, 0.25),
+		NumberSequenceKeypoint.new(1, 0.55),
+	})
+	g.Parent = resetBtn
+	refs.resetGrad = g
+end
+local resetLbl = Instance.new("TextLabel")
+resetLbl.Size = UDim2.fromScale(1, 1)
+resetLbl.BackgroundTransparency = 1
+resetLbl.Text = "RESET INPUT"
+resetLbl.Font = Enum.Font.GothamBlack
+resetLbl.TextSize = 11
+resetLbl.TextColor3 = Theme.Text
+resetLbl.ZIndex = 14
+resetLbl.Parent = resetBtn
+register(resetLbl, "TextColor3", "Text")
+resetBtn.MouseEnter:Connect(function()
+	tw(resetBtn, {BackgroundTransparency = 0.08}, TIS)
+	tw(rst, {Transparency = 0.15, Color = Theme.Cyan}, TIS)
+	tw(resetLbl, {TextColor3 = Theme.Cyan}, TIS)
+end)
+resetBtn.MouseLeave:Connect(function()
+	tw(resetBtn, {BackgroundTransparency = 0.22}, TIS)
+	tw(rst, {Transparency = 0.35, Color = Theme.Cyan}, TIS)
+	tw(resetLbl, {TextColor3 = Theme.Text}, TIS)
+end)
+resetBtn.MouseButton1Click:Connect(function()
+	tw(resetBtn, {BackgroundTransparency = 0.05}, TweenInfo.new(0.08))
+	resetInput()
+	resetLbl.Text = "CLEARED"
+	resetLbl.TextColor3 = Theme.Green
+	task.delay(0.7, function()
+		if resetLbl and resetLbl.Parent then
+			resetLbl.Text = "RESET INPUT"
+			resetLbl.TextColor3 = Theme.Text
+		end
+	end)
+end)
+
+
+local trackHint = Instance.new("TextLabel")
+trackHint.BackgroundTransparency = 1
+trackHint.Position = UDim2.fromOffset(6, 354)
+trackHint.Size = UDim2.new(1, -12, 0, 10)
+trackHint.Font = Enum.Font.Gotham
+trackHint.Text = "off = ignore arm phrases (testing)"
+trackHint.TextSize = 7
+trackHint.TextColor3 = Theme.Muted
+trackHint.TextXAlignment = Enum.TextXAlignment.Left
+trackHint.ZIndex = 13
+trackHint.Parent = PageMain
+register(trackHint, "TextColor3", "Muted")
+
+-- Activity
+local actTitle = Instance.new("TextLabel")
+actTitle.BackgroundTransparency = 1
+actTitle.Position = UDim2.fromOffset(4, 364)
+actTitle.Size = UDim2.new(1, -8, 0, 12)
+actTitle.Font = FT
+actTitle.Text = "ACTIVITY"
+actTitle.TextSize = 9
+actTitle.TextColor3 = Theme.Muted
+actTitle.TextXAlignment = Enum.TextXAlignment.Left
+actTitle.ZIndex = 13
+actTitle.Parent = PageMain
+register(actTitle, "TextColor3", "Muted")
+
+activityHost = Instance.new("Frame")
+activityHost.Size = UDim2.new(1, 0, 0, 28)
+activityHost.Position = UDim2.fromOffset(0, 376)
+activityHost.BackgroundTransparency = 1
+activityHost.ClipsDescendants = true
+activityHost.ZIndex = 13
+activityHost.Parent = PageMain
+do
+	local lay = Instance.new("UIListLayout")
+	lay.SortOrder = Enum.SortOrder.LayoutOrder
+	lay.Padding = UDim.new(0, 1)
+	lay.Parent = activityHost
+end
+
+-- ========== SETTINGS PAGE ==========
+local function sectionLabel(parent, y, text)
+	local head = Instance.new("Frame")
+	head.BackgroundTransparency = 1
+	head.Size = UDim2.new(1, 0, 0, 16)
+	head.Position = UDim2.fromOffset(0, y)
+	head.ZIndex = 13
+	head.Parent = parent
+	local lb = Instance.new("TextLabel")
+	lb.BackgroundTransparency = 1
+	lb.Size = UDim2.new(1, 0, 1, 0)
+	lb.Font = Enum.Font.GothamBold
+	lb.Text = text
+	lb.TextSize = 10
+	lb.TextColor3 = Theme.Accent
+	lb.TextXAlignment = Enum.TextXAlignment.Left
+	lb.ZIndex = 14
+	lb.Parent = head
+	register(lb, "TextColor3", "Accent")
+	-- measure approx width for fade line
+	local twid = math.max(40, #text * 7)
+	local line = Instance.new("Frame")
+	line.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	line.BorderSizePixel = 0
+	line.AnchorPoint = Vector2.new(1, 0.5)
+	line.Position = UDim2.new(1, 0, 0.5, 0)
+	line.Size = UDim2.new(1, -(twid + 14), 0, 1)
+	line.ZIndex = 13
+	line.Parent = head
+	local lg = Instance.new("UIGradient")
+	lg.Color = ColorSequence.new(Theme.Accent, Theme.Accent2)
+	lg.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.35),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	lg.Parent = line
+	return head
+end
+
+
+sectionLabel(PageSettings, 8, "FILTER")
+makeCardToggle(PageSettings, 28, "👁", "SAMMY FILTER", "Only SpyderSammy messages", _G.SammyFilterEnabled ~= false, function(s)
+	_G.SammyFilterEnabled = s
+	pushActivity(s and "Sammy ON" or "Sammy OFF", Theme.Cyan)
+end)
+
+sectionLabel(PageSettings, 80, "GENERAL")
+makeCardToggle(PageSettings, 100, "❄", "ANCHOR", "Freeze character", _G.AnchorEnabled == true, function(s)
+	_G.AnchorEnabled = s
+	pushActivity(s and "Anchor ON" or "Anchor OFF", Theme.Cyan)
+end)
+makeCardToggle(PageSettings, 154, "🛒", "AUTO BUY", "Buy · 10 studs", _G.AutoBuyEnabled == true, function(s)
+	_G.AutoBuyEnabled = s
+	pushActivity(s and "AutoBuy ON" or "AutoBuy OFF", Theme.Cyan)
+end)
+
+makeCardToggle(PageSettings, 208, "🔁", "RETHINK INVALID", "Backup AI answer when code is invalid", _G.RethinkInvalid ~= false, function(s)
+	_G.RethinkInvalid = s
+	pcall(k2SniperSaveConfig)
+end)
+
+-- ========== OG SNIPER launcher (compact) ==========
+do
+	
+sectionLabel(PageSettings, 262, "EVENTS")
+makeCardToggle(PageSettings, 282, "🚫", "BLOCK ALL EVENTS", "Cancel active game events / FX", _G.BlockEventsEnabled == true, function(s)
+	_G.BlockEventsEnabled = s
+	task.spawn(function()
+		if s then
+			local ok, a, b = pcall(function() return eventBlock.Block() end)
+			if ok and a then
+				if pushActivity then pushActivity(tostring(b or "events blocked"), Theme.Cyan) end
+			else
+				if pushActivity then pushActivity("events: " .. tostring(eventBlock.why or b or a), Theme.Amber) end
+			end
+		else
+			local ok, a, b = pcall(function() return eventBlock.Unblock() end)
+			if ok and a then
+				if pushActivity then pushActivity(tostring(b or "events unblocked"), Theme.Cyan) end
+			end
+		end
+	end)
+	k2SniperSaveConfig()
+end)
+
+sectionLabel(PageSettings, 340, "TOOLS")
+	local ogRow = Instance.new("Frame")
+	ogRow.Size = UDim2.new(1, 0, 0, 36)
+	ogRow.Position = UDim2.fromOffset(0, 360)
+	ogRow.BackgroundColor3 = Theme.Card
+	ogRow.BackgroundTransparency = 0.28
+	ogRow.BorderSizePixel = 0
+	ogRow.ZIndex = 13
+	ogRow.Parent = PageSettings
+	corner(ogRow, 10)
+	local ogSt = stroke(ogRow, Theme.Border, 1, 0.45)
+	register(ogRow, "BackgroundColor3", "Card")
+	register(ogSt, "Color", "Border")
+
+	local ogLbl = Instance.new("TextLabel")
+	ogLbl.BackgroundTransparency = 1
+	ogLbl.Position = UDim2.fromOffset(12, 0)
+	ogLbl.Size = UDim2.new(1, -100, 1, 0)
+	ogLbl.Font = FB
+	ogLbl.Text = "OG SNIPER"
+	ogLbl.TextSize = 11
+	ogLbl.TextColor3 = Theme.Text
+	ogLbl.TextXAlignment = Enum.TextXAlignment.Left
+	ogLbl.ZIndex = 14
+	ogLbl.Parent = ogRow
+	register(ogLbl, "TextColor3", "Text")
+
+	local ogOpen = Instance.new("TextButton")
+	ogOpen.Size = UDim2.fromOffset(72, 24)
+	ogOpen.Position = UDim2.new(1, -84, 0.5, -12)
+	ogOpen.BackgroundColor3 = Theme.Accent
+	ogOpen.BackgroundTransparency = 0.08
+	ogOpen.Text = "OPEN"
+	ogOpen.Font = Enum.Font.GothamBold
+	ogOpen.TextSize = 10
+	ogOpen.TextColor3 = Theme.Contrast
+	ogOpen.AutoButtonColor = false
+	ogOpen.ZIndex = 14
+	ogOpen.Parent = ogRow
+	corner(ogOpen, 8)
+	register(ogOpen, "BackgroundColor3", "Accent")
+	register(ogOpen, "TextColor3", "Contrast")
+	ogOpen.MouseButton1Click:Connect(function()
+		if type(_G.K2OpenOGSniper) == "function" then
+			_G.K2OpenOGSniper()
+		end
+	end)
+end
+
+
+sectionLabel(PageSettings, 410, "SUBMISSION")
+local function stepper(parent, y, label, getV, setV, minV, maxV)
+	local f = Instance.new("Frame")
+	f.Size = UDim2.new(1, 0, 0, 40)
+	f.Position = UDim2.fromOffset(0, y)
+	f.BackgroundColor3 = Theme.Card
+	f.BackgroundTransparency = 0.30
+	f.BorderSizePixel = 0
+	f.ZIndex = 13
+	f.Parent = parent
+	corner(f, 12)
+	local st = stroke(f, Theme.Border, 1, 0.5)
+	register(f, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+	local lb = Instance.new("TextLabel")
+	lb.BackgroundTransparency = 1
+	lb.Position = UDim2.fromOffset(12, 0)
+	lb.Size = UDim2.new(0.5, 0, 1, 0)
+	lb.Font = FT
+	lb.Text = label
+	lb.TextSize = 11
+	lb.TextColor3 = Theme.Text
+	lb.TextXAlignment = Enum.TextXAlignment.Left
+	lb.ZIndex = 14
+	lb.Parent = f
+	register(lb, "TextColor3", "Text")
+	local box = Instance.new("Frame")
+	box.Size = UDim2.fromOffset(90, 28)
+	box.Position = UDim2.new(1, -100, 0.5, -14)
+	box.BackgroundColor3 = Theme.Side
+	box.BackgroundTransparency = 0.2
+	box.BorderSizePixel = 0
+	box.ZIndex = 14
+	box.Parent = f
+	corner(box, 8)
+	register(box, "BackgroundColor3", "Side")
+	local val = Instance.new("TextLabel")
+	val.Size = UDim2.fromScale(1,1)
+	val.BackgroundTransparency = 1
+	val.Font = FT
+	val.Text = tostring(getV())
+	val.TextSize = 13
+	val.TextColor3 = Theme.Cyan
+	val.ZIndex = 15
+	val.Parent = box
+	register(val, "TextColor3", "Cyan")
+	local mi = Instance.new("TextButton")
+	mi.Size = UDim2.fromOffset(28, 28)
+	mi.BackgroundTransparency = 1
+	mi.Text = "−"
+	mi.Font = FT
+	mi.TextSize = 14
+	mi.TextColor3 = Theme.Muted
+	mi.ZIndex = 16
+	mi.Parent = box
+	register(mi, "TextColor3", "Muted")
+	local pl = Instance.new("TextButton")
+	pl.Size = UDim2.fromOffset(28, 28)
+	pl.Position = UDim2.new(1, -28, 0, 0)
+	pl.BackgroundTransparency = 1
+	pl.Text = "+"
+	pl.Font = FT
+	pl.TextSize = 14
+	pl.TextColor3 = Theme.Muted
+	pl.ZIndex = 16
+	pl.Parent = box
+	register(pl, "TextColor3", "Muted")
+	mi.MouseButton1Click:Connect(function()
+		setV(math.max(minV, getV() - 1))
+		val.Text = tostring(getV())
+		if updateCounters then updateCounters() end
+		if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
+	end)
+	pl.MouseButton1Click:Connect(function()
+		setV(math.min(maxV, getV() + 1))
+		val.Text = tostring(getV())
+		if updateCounters then updateCounters() end
+		if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
+	end)
+end
+stepper(PageSettings, 430, "Submit After (words)", function() return _G.SubmitAfterCount end, function(v) _G.SubmitAfterCount = v; if updateCounters then updateCounters() end end, 1, 20)
+
+
+-- Type speed
+do
+	local f = Instance.new("Frame")
+	f.Size = UDim2.new(1, 0, 0, 40)
+	f.Position = UDim2.fromOffset(0, 480)
+	f.BackgroundColor3 = Theme.Card
+	f.BackgroundTransparency = 0.12
+	f.BorderSizePixel = 0
+	f.ZIndex = 13
+	f.Parent = PageSettings
+	corner(f, 12)
+	local st = stroke(f, Theme.Border, 1, 0.5)
+	register(f, "BackgroundColor3", "Card")
+	register(st, "Color", "Border")
+	local lb = Instance.new("TextLabel")
+	lb.BackgroundTransparency = 1
+	lb.Position = UDim2.fromOffset(12, 0)
+	lb.Size = UDim2.new(0.4, 0, 1, 0)
+	lb.Font = Enum.Font.GothamBlack
+	lb.Text = "Type Speed"
+	lb.TextSize = 11
+	lb.TextColor3 = Theme.Text
+	lb.TextXAlignment = Enum.TextXAlignment.Left
+	lb.ZIndex = 14
+	lb.Parent = f
+	register(lb, "TextColor3", "Text")
+	local modes = {"Fast", "Normal"}
+	local btns = {}
+	for i, mode in ipairs(modes) do
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.fromOffset(54, 24)
+		b.Position = UDim2.new(1, -12 - (2 - i + 1) * 58, 0.5, -12)
+		b.BackgroundColor3 = Theme.Side
+		b.BackgroundTransparency = 0.05
+		b.Text = mode
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = 10
+		b.TextColor3 = Theme.Muted
+		b.AutoButtonColor = false
+		b.ZIndex = 14
+		b.Parent = f
+		corner(b, 8)
+		btns[mode] = b
+		b.MouseButton1Click:Connect(function()
+			_G.TypeSpeed = mode
+			for m, btn in pairs(btns) do
+				if m == mode then
+					btn.BackgroundColor3 = Theme.Accent
+					btn.TextColor3 = Theme.Contrast
+				else
+					btn.BackgroundColor3 = Theme.Side
+					btn.TextColor3 = Theme.Muted
+				end
+			end
+			pushActivity("Speed " .. mode, Theme.Cyan)
+			if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
+		end)
+	end
+	local function refreshSeg()
+		local cur = tostring(_G.TypeSpeed or "Fast")
+		for m, btn in pairs(btns) do
+			if m == cur then
+				btn.BackgroundColor3 = Theme.Accent
+				btn.TextColor3 = Theme.Contrast
+			else
+				btn.BackgroundColor3 = Theme.Side
+				btn.TextColor3 = Theme.Muted
+			end
+		end
+	end
+	refreshSeg()
+	table.insert(segmentRegistry, { refresh = refreshSeg })
+end
+
+local info = Instance.new("TextLabel")
+info.BackgroundTransparency = 1
+info.Position = UDim2.fromOffset(4, 540)
+info.Size = UDim2.new(1, -16, 0, 40)
+info.Font = FB
+info.TextSize = 9
+info.TextColor3 = Theme.Muted
+info.TextXAlignment = Enum.TextXAlignment.Left
+info.TextYAlignment = Enum.TextYAlignment.Top
+info.Text = "Submit After = words to join after trigger\ncode is → listen → N words → type+submit"
+info.ZIndex = 13
+info.Parent = PageSettings
+register(info, "TextColor3", "Muted")
+
+
+-- ========== ANNOUNCEMENTS TEST (Sniper | Riddle) ==========
+do
+	sectionLabel(PageSettings, 600, "ANNOUNCEMENTS TEST")
+	PageSettings.CanvasSize = UDim2.new(0, 0, 0, 980)
+
+	local testMode = "sniper" -- "sniper" | "riddle"
+
+	local card = Instance.new("Frame")
+	card.Name = "AnnounceTestCard"
+	card.Size = UDim2.new(1, 0, 0, 158)
+	card.Position = UDim2.fromOffset(0, 620)
+	card.BackgroundColor3 = Theme.Card
+	card.BackgroundTransparency = 0.30
+	card.BorderSizePixel = 0
+	card.ZIndex = 13
+	card.Parent = PageSettings
+	corner(card, 12)
+	local cardSt = stroke(card, Theme.Border, 1, 0.5)
+	register(card, "BackgroundColor3", "Card")
+	register(cardSt, "Color", "Border")
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(12, 6)
+	title.Size = UDim2.new(0.45, 0, 0, 14)
+	title.Font = FT
+	title.Text = "ANNOUNCEMENTS"
+	title.TextSize = 11
+	title.TextColor3 = Theme.Text
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.ZIndex = 14
+	title.Parent = card
+	register(title, "TextColor3", "Text")
+
+	-- Mode switch top-right: SNIPER | RIDDLE
+	local modeHost = Instance.new("Frame")
+	modeHost.Size = UDim2.fromOffset(148, 24)
+	modeHost.Position = UDim2.new(1, -160, 0, 4)
+	modeHost.BackgroundColor3 = Theme.Side
+	modeHost.BackgroundTransparency = 0.15
+	modeHost.BorderSizePixel = 0
+	modeHost.ZIndex = 14
+	modeHost.Parent = card
+	corner(modeHost, 8)
+	register(modeHost, "BackgroundColor3", "Side")
+
+	local modeSniper = Instance.new("TextButton")
+	modeSniper.Size = UDim2.new(0.5, -2, 1, -4)
+	modeSniper.Position = UDim2.fromOffset(2, 2)
+	modeSniper.BackgroundColor3 = Theme.Accent
+	modeSniper.BackgroundTransparency = 0.05
+	modeSniper.Text = "SNIPER"
+	modeSniper.Font = FB
+	modeSniper.TextSize = 9
+	modeSniper.TextColor3 = Theme.Contrast
+	modeSniper.AutoButtonColor = false
+	modeSniper.ZIndex = 15
+	modeSniper.Parent = modeHost
+	corner(modeSniper, 6)
+
+	local modeRiddle = Instance.new("TextButton")
+	modeRiddle.Size = UDim2.new(0.5, -2, 1, -4)
+	modeRiddle.Position = UDim2.new(0.5, 0, 0, 2)
+	modeRiddle.BackgroundColor3 = Theme.Side
+	modeRiddle.BackgroundTransparency = 1
+	modeRiddle.Text = "RIDDLE"
+	modeRiddle.Font = FB
+	modeRiddle.TextSize = 9
+	modeRiddle.TextColor3 = Theme.Muted
+	modeRiddle.AutoButtonColor = false
+	modeRiddle.ZIndex = 15
+	modeRiddle.Parent = modeHost
+	corner(modeRiddle, 6)
+
+	local hint = Instance.new("TextLabel")
+	hint.BackgroundTransparency = 1
+	hint.Position = UDim2.fromOffset(12, 24)
+	hint.Size = UDim2.new(1, -24, 0, 12)
+	hint.Font = FM
+	hint.Text = "Sniper: paste announcement (code is / words)"
+	hint.TextSize = 8
+	hint.TextColor3 = Theme.Muted
+	hint.TextXAlignment = Enum.TextXAlignment.Left
+	hint.ZIndex = 14
+	hint.Parent = card
+	register(hint, "TextColor3", "Muted")
+
+	local boxWell = Instance.new("Frame")
+	boxWell.Size = UDim2.new(1, -20, 0, 48)
+	boxWell.Position = UDim2.fromOffset(12, 40)
+	boxWell.BackgroundColor3 = Theme.Side
+	boxWell.BackgroundTransparency = 0.08
+	boxWell.BorderSizePixel = 0
+	boxWell.ZIndex = 14
+	boxWell.Parent = card
+	corner(boxWell, 10)
+	local boxSt = stroke(boxWell, Theme.Border, 1.25, 0.38)
+	register(boxWell, "BackgroundColor3", "Side")
+	register(boxSt, "Color", "Border")
+
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, -14, 1, -10)
+	box.Position = UDim2.fromOffset(7, 5)
+	box.BackgroundTransparency = 1
+	box.Text = ""
+	box.PlaceholderText = "paste or type announcement…"
+	box.PlaceholderColor3 = Theme.Muted
+	box.TextColor3 = Theme.Text
+	box.Font = FM
+	box.TextSize = 11
+	box.ClearTextOnFocus = false
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.TextYAlignment = Enum.TextYAlignment.Top
+	box.TextWrapped = true
+	box.MultiLine = true
+	box.ZIndex = 15
+	box.Parent = boxWell
+	register(box, "TextColor3", "Text")
+	register(box, "PlaceholderColor3", "Muted")
+	box.Focused:Connect(function()
+		pcall(function()
+			boxSt.Color = Theme.Accent
+			boxSt.Transparency = 0.12
+			boxSt.Thickness = 1.5
+		end)
+	end)
+	box.FocusLost:Connect(function()
+		pcall(function()
+			boxSt.Color = Theme.Border
+			boxSt.Transparency = 0.38
+			boxSt.Thickness = 1.25
+		end)
+	end)
+
+	local sampleBtn = Instance.new("TextButton")
+	sampleBtn.Size = UDim2.fromOffset(80, 28)
+	sampleBtn.Position = UDim2.fromOffset(12, 98)
+	sampleBtn.BackgroundColor3 = Theme.Side
+	sampleBtn.BackgroundTransparency = 0.1
+	sampleBtn.Text = "SAMPLE"
+	sampleBtn.Font = FB
+	sampleBtn.TextSize = 10
+	sampleBtn.TextColor3 = Theme.Muted
+	sampleBtn.AutoButtonColor = false
+	sampleBtn.Visible = false -- only riddle mode
+	sampleBtn.ZIndex = 14
+	sampleBtn.Parent = card
+	corner(sampleBtn, 8)
+	register(sampleBtn, "BackgroundColor3", "Side")
+	register(sampleBtn, "TextColor3", "Muted")
+
+	local sendBtn = Instance.new("TextButton")
+	sendBtn.Size = UDim2.fromOffset(80, 28)
+	sendBtn.Position = UDim2.fromOffset(100, 98)
+	sendBtn.BackgroundColor3 = Theme.Cyan
+	sendBtn.BackgroundTransparency = 0.1
+	sendBtn.Text = "SEND"
+	sendBtn.Font = FT
+	sendBtn.TextSize = 10
+	sendBtn.TextColor3 = Theme.Contrast
+	sendBtn.AutoButtonColor = false
+	sendBtn.ZIndex = 14
+	sendBtn.Parent = card
+	corner(sendBtn, 8)
+	register(sendBtn, "BackgroundColor3", "Cyan")
+	register(sendBtn, "TextColor3", "Contrast")
+
+	local samples = {
+		"what is my real name",
+		"how old am i",
+		"what is my favorite color",
+		"what is my cats name",
+		"what is the name of the game",
+		"who made steal a brainrot",
+		"what is my favorite food",
+		"where do i live",
+		"riddle is what is my name",
+		"what is my age twice",
+	}
+
+	local function applyMode(mode)
+		testMode = mode
+		if mode == "sniper" then
+			modeSniper.BackgroundTransparency = 0.05
+			modeSniper.BackgroundColor3 = Theme.Accent
+			modeSniper.TextColor3 = Theme.Contrast
+			modeRiddle.BackgroundTransparency = 1
+			modeRiddle.BackgroundColor3 = Theme.Side
+			modeRiddle.TextColor3 = Theme.Muted
+			hint.Text = "Sniper: paste announcement (code is / next words)"
+			box.PlaceholderText = "announcement text..."
+			sampleBtn.Visible = false
+			sendBtn.Position = UDim2.fromOffset(12, 98)
+		else
+			modeRiddle.BackgroundTransparency = 0.05
+			modeRiddle.BackgroundColor3 = Theme.Accent
+			modeRiddle.TextColor3 = Theme.Contrast
+			modeSniper.BackgroundTransparency = 1
+			modeSniper.BackgroundColor3 = Theme.Side
+			modeSniper.TextColor3 = Theme.Muted
+			hint.Text = "Riddle: fires top notify like Luna · samples on"
+			box.PlaceholderText = "riddle announcement..."
+			sampleBtn.Visible = true
+			sendBtn.Position = UDim2.fromOffset(100, 98)
+		end
+	end
+
+	table.insert(segmentRegistry, {
+		refresh = function()
+			applyMode(testMode or "sniper")
+		end
+	})
+
+	modeSniper.MouseButton1Click:Connect(function() applyMode("sniper") end)
+	modeRiddle.MouseButton1Click:Connect(function() applyMode("riddle") end)
+
+	sampleBtn.MouseButton1Click:Connect(function()
+		box.Text = samples[math.random(1, #samples)]
+	end)
+
+	sendBtn.MouseButton1Click:Connect(function()
+		local text = tostring(box.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if text == "" then
+			pushActivity("Empty test text", Theme.Amber)
+			return
+		end
+		task.spawn(function()
+			local ok, method = fireAnnouncement(text)
+			pushActivity((ok and "TEST OK: " or "TEST FAIL: ") .. tostring(method), ok and Theme.Green or Theme.Amber)
+		end)
+	end)
+
+	-- Open full Luna TEST SENDER from settings-style button if present
+	if openSenderBtn then
+		openSenderBtn.MouseButton1Click:Connect(function()
+			buildTestSender()
+		end)
+	end
+
+	applyMode("sniper")
+end
+
+-- ========== NAV ==========
+local Nav = Instance.new("Frame")
+Nav.Size = UDim2.new(1, -16, 0, 38)
+Nav.Position = UDim2.new(0, 8, 1, -46)
+Nav.BackgroundColor3 = Theme.Card
+Nav.BackgroundTransparency = 0.25
+Nav.BorderSizePixel = 0
+Nav.ZIndex = 14
+Nav.Parent = MainFrame
+corner(Nav, 12)
+local navSt = stroke(Nav, Theme.Border, 1, 0.45)
+register(Nav, "BackgroundColor3", "Card")
+register(navSt, "Color", "Border")
+
+local tabIndicator = Instance.new("Frame")
+tabIndicator.Size = UDim2.new(0.5, -8, 0, 2)
+tabIndicator.Position = UDim2.new(0, 6, 1, -4)
+tabIndicator.BackgroundColor3 = Theme.Cyan
+tabIndicator.BorderSizePixel = 0
+tabIndicator.ZIndex = 15
+tabIndicator.Parent = Nav
+corner(tabIndicator, 1)
+register(tabIndicator, "BackgroundColor3", "Cyan")
+
+local function navTab(text, xScale, isMain)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0.5, -6, 1, -6)
+	b.Position = UDim2.new(xScale, 4, 0, 3)
+	b.BackgroundTransparency = 1
+	b.Text = text
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 11
+	b.TextColor3 = isMain and Theme.Text or Theme.Muted
+	b.ZIndex = 15
+	b.Parent = Nav
+	register(b, "TextColor3", isMain and "Text" or "Muted")
+	return b
+end
+local navMain = navTab("◎  MAIN", 0, true)
+local navSet = navTab("⚙  SETTINGS", 0.5, false)
+navMain.MouseButton1Click:Connect(function()
+	PageMain.Visible = true
+	PageSettings.Visible = false
+	tw(tabIndicator, {Position = UDim2.new(0, 6, 1, -4)}, TIS)
+	navMain.TextColor3 = Theme.Text
+	navSet.TextColor3 = Theme.Muted
+end)
+navSet.MouseButton1Click:Connect(function()
+	PageMain.Visible = false
+	PageSettings.Visible = true
+	tw(tabIndicator, {Position = UDim2.new(0.5, 2, 1, -4)}, TIS)
+	navSet.TextColor3 = Theme.Text
+	navMain.TextColor3 = Theme.Muted
+end)
+
+-- ========== ORB (premium K2 minimize badge) ==========
+Orb = Instance.new("TextButton")
+Orb.Name = "K2MinOrb"
+Orb.Size = UDim2.fromOffset(52, 52)
+Orb.AnchorPoint = Vector2.new(1, 0)
+Orb.Position = UDim2.new(1, -18, 0, 18)
+Orb.BackgroundColor3 = Theme.Panel
+Orb.BackgroundTransparency = 0.08
+Orb.Text = ""
+Orb.Visible = false
+Orb.ZIndex = 50
+Orb.AutoButtonColor = false
+Orb.ClipsDescendants = true
+Orb.Parent = ScreenGui
+corner(Orb, 14)
+local orbSt = stroke(Orb, Theme.Cyan, 2, 0.15)
+register(Orb, "BackgroundColor3", "Panel")
+register(orbSt, "Color", "Cyan")
+
+local isMinimized = false
+local function ensureOrbChrome()
+	if Orb:FindFirstChild("Inner") then return end
+	local orbInner = Instance.new("Frame")
+	orbInner.Name = "Inner"
+	orbInner.Size = UDim2.fromOffset(36, 36)
+	orbInner.AnchorPoint = Vector2.new(0.5, 0.5)
+	orbInner.Position = UDim2.fromScale(0.5, 0.5)
+	orbInner.BackgroundColor3 = Theme.Cyan
+	orbInner.BackgroundTransparency = 0.05
+	orbInner.BorderSizePixel = 0
+	orbInner.ZIndex = 51
+	orbInner.Parent = Orb
+	corner(orbInner, 10)
+	local orbInnerSt = stroke(orbInner, Theme.Accent2, 1.2, 0.25)
+	register(orbInner, "BackgroundColor3", "Cyan")
+	register(orbInnerSt, "Color", "Accent2")
+	local orbLbl = Instance.new("TextLabel")
+	orbLbl.Name = "Lbl"
+	orbLbl.Size = UDim2.fromScale(1, 1)
+	orbLbl.BackgroundTransparency = 1
+	orbLbl.Text = "K2"
+	orbLbl.Font = Enum.Font.GothamBlack
+	orbLbl.TextSize = 13
+	orbLbl.TextColor3 = Theme.Contrast
+	orbLbl.ZIndex = 52
+	orbLbl.Parent = orbInner
+	register(orbLbl, "TextColor3", "Contrast")
+	local orbGlow = Instance.new("UIStroke")
+	orbGlow.Name = "OrbGlow"
+	orbGlow.Color = Theme.Cyan
+	orbGlow.Thickness = 3
+	orbGlow.Transparency = 0.55
+	orbGlow.Parent = Orb
+end
+
+local function setMinimized(state)
+	isMinimized = state == true
+	ensureOrbChrome()
+	local orbInner = Orb:FindFirstChild("Inner")
+	local orbLbl = orbInner and orbInner:FindFirstChild("Lbl")
+	local orbGlow = Orb:FindFirstChild("OrbGlow")
+	if isMinimized then
+		Orb.Visible = true
+		Orb.Size = UDim2.fromOffset(10, 10)
+		Orb.BackgroundTransparency = 1
+		if orbInner then orbInner.BackgroundTransparency = 1 end
+		if orbLbl then orbLbl.TextTransparency = 1 end
+		local keepPos = MainFrame.Position
+		tw(MainFrame, {Size = UDim2.fromOffset(36, 36), BackgroundTransparency = 1}, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
+		task.delay(0.2, function()
+			MainFrame.Visible = false
+			MainFrame.Position = keepPos
+			MainFrame.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+			tw(Orb, {Size = UDim2.fromOffset(52, 52), BackgroundTransparency = 0.08}, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
+			if orbInner then tw(orbInner, {BackgroundTransparency = 0.05}, TweenInfo.new(0.22, Enum.EasingStyle.Quad)) end
+			if orbLbl then tw(orbLbl, {TextTransparency = 0}, TweenInfo.new(0.18)) end
+			if orbSt then tw(orbSt, {Transparency = 0.12}, TweenInfo.new(0.22)) end
+		end)
+	else
+		Orb.Visible = false
+		MainFrame.Visible = true
+		MainFrame.Size = UDim2.fromOffset(math.floor(PANEL_W * 0.92), math.floor(PANEL_H * 0.92))
+		MainFrame.BackgroundTransparency = 1
+		tw(MainFrame, {Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency = 0.16}, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
+	end
+end
+MinBtn.MouseButton1Click:Connect(function() setMinimized(true) end)
+Orb.MouseButton1Click:Connect(function() setMinimized(false) end)
+task.spawn(function()
+	while ScreenGui and ScreenGui.Parent do
+		if isMinimized and Orb and Orb.Visible then
+			local glow = Orb:FindFirstChild("OrbGlow")
+			if glow then
+				pcall(function()
+					tw(glow, {Transparency = 0.35}, TweenInfo.new(0.7, Enum.EasingStyle.Sine))
+					task.wait(0.7)
+					tw(glow, {Transparency = 0.7}, TweenInfo.new(0.7, Enum.EasingStyle.Sine))
+				end)
+			end
+		end
+		task.wait(0.75)
+	end
+end)
+
+-- Drag
+do
+	local dragging, start, startPos
+	Header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			start = input.Position
+			startPos = MainFrame.Position
+		end
+	end)
+	Header.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	UIS.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - start
+			MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+-- Ambient
+task.spawn(function()
+	while ScreenGui and ScreenGui.Parent do
+		if not isMinimized then
+			local t = tick()
+			if refs.borderGrad then refs.borderGrad.Rotation = (t * 8) % 360 end
+			if StatusDot then StatusDot.BackgroundTransparency = 0.15 + math.sin(t * 1.1) * 0.12 end
+		end
+		task.wait(1.0) -- lag-free ambient
+	end
+end)
+
+-- Open animation (no full-screen intro)
+MainFrame.Visible = true
+MainFrame.Size = UDim2.fromOffset(PANEL_W * 0.94, PANEL_H * 0.94)
+MainFrame.BackgroundTransparency = 1
+tw(MainFrame, {Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency = 0.16}, TIB)
+
+-- Load bg + mood
+task.spawn(function()
+	local startIdx = math.clamp(tonumber(_G.K2SniperBgIndex) or 1, 1, #BG_URLS)
+	local asset = resolveBg(BG_URLS[startIdx], startIdx)
+	if asset and refs.bg then
+		refs.bg.Image = asset
+		refs.bg.Visible = true
+	end
+	applyMood(startIdx, true)
+	pushActivity("Online", Theme.Green)
+	pushActivity("Config loaded", Theme.Muted)
+end)
+
+-- notification listener started earlier (no PlayerGui text scan)
+
+task.spawn(function()
+	while ScreenGui and ScreenGui.Parent do task.wait(1) end
+	getgenv().K2CodeSniperV2 = nil
+	getgenv().K2CodeSniperGui = nil
+end)
+
+-- Persist on leave / periodic
+pcall(function()
+	game:BindToClose(function()
+		pcall(k2SniperSaveConfig)
+	end)
+end)
+task.spawn(function()
+	while ScreenGui and ScreenGui.Parent do
+		task.wait(25)
+		pcall(k2SniperSaveConfig)
+	end
+end)
+
+getgenv().K2SniperTestAnnounce = function(text)
+	if type(onAnnounce) == "function" then onAnnounce(tostring(text or ""), "Top") end
+end
+
+-- Particles DISABLED for zero lag (VMForge / live)
+-- (Halloween particle layer removed — static UI only)
+
+-- Outer glow pulse DISABLED (was a permanent Heartbeat-style loop → lag)
+do
+	local glowStroke = MainFrame and MainFrame:FindFirstChildOfClass("UIStroke")
+	if glowStroke then
+		pcall(function()
+			glowStroke.Transparency = 0.35
+			glowStroke.Thickness = 1.5
+		end)
+	end
+end
+
+
+-- Rethink-invalid: poll Codes UI only (NO full PlayerGui scan = no freeze)
+do
+	local lastInvalidAt = 0
+	task.spawn(function()
+		while true do
+			task.wait(1.25)
+			if _G.RethinkInvalid and ScreenGui and ScreenGui.Parent then
+				local pg = LP and LP:FindFirstChildOfClass("PlayerGui")
+				local codes = pg and pg:FindFirstChild("Codes")
+				if codes then
+					local hit = false
+					for _, obj in ipairs(codes:GetDescendants()) do
+						if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+							local tx = tostring(obj.Text or ""):lower()
+							if tx:find("invalid", 1, true) then
+								hit = true
+								break
+							end
+						end
+					end
+					if hit and (tick() - lastInvalidAt) > 1.5 then
+						lastInvalidAt = tick()
+						pcall(tryRethinkInvalid, _lastRiddleA)
+					end
+				end
+			elseif not ScreenGui or not ScreenGui.Parent then
+				break
+			end
+		end
+	end)
+end
+
+
+
+
+
+-- OG Sniper (Star Hub functions) — isolated scope, K2 theme, LEFT of Code Sniper
+task.spawn(function()
+	local HttpService = game:GetService("HttpService")
+	local Players = game:GetService("Players")
+	local UIS = game:GetService("UserInputService")
+	local TS = game:GetService("TweenService")
+	local RS = game:GetService("ReplicatedStorage")
+	local LP = Players.LocalPlayer
+
+	-- Wait for parent GUI hooks
+	local function waitTheme()
+		for _ = 1, 100 do
+			if type(Theme) == "table" and type(register) == "function" and PANEL_W and MainFrame then
+				return true
+			end
+			task.wait(0.05)
+		end
+		return type(Theme) == "table"
+	end
+	if not waitTheme() then
+		warn("[K2 OG] Theme not ready")
+		return
+	end
+
+	local CFG_FILE = "k2_star_og_settings.json"
+	local state = {
+		FallingSnow = true,
+		OGOnly = true,
+		Notifications = true,
+		NotifSounds = true,
+		NotifVolume = 1,
+		NotifSoundIndex = 1,
+		SortMode = "NEW", -- NEW | GEN
+		Search = "",
+		Filters = { strawberry = true, meowl = true, skibidi = true, johnpork = true },
+		AutoTrade = true, -- cycle invites every 6s; pause in trade; skip fails
+	}
+	pcall(function()
+		if isfile and isfile(CFG_FILE) then
+			local d = HttpService:JSONDecode(readfile(CFG_FILE))
+			if type(d) == "table" then
+				for k, v in pairs(d) do
+					if state[k] ~= nil then state[k] = v end
+				end
+			end
+		end
+	end)
+	local function saveCfg()
+		pcall(function()
+			if writefile then writefile(CFG_FILE, HttpService:JSONEncode(state)) end
+		end)
+	end
+
+	local OG_MAP = {
+		strawberry = { keys = { "strawberry elephant", "strawberryelephant", "strawberry" }, short = "S.ELEPH", label = "Strawberry Elephant" },
+		meowl = { keys = { "meowl" }, short = "M.MEOWL", label = "Meowl" },
+		skibidi = { keys = { "skibidi toilet", "skibiditoilet", "skibidi" }, short = "S.SKIBIDI", label = "Skibidi Toilet" },
+		johnpork = { keys = { "john pork", "johnpork", "john" }, short = "J.J.PORK", label = "John Pork" },
+	}
+	-- Also treat known OG aliases as OG for display
+	local EXTRA_OG = {
+		["spyder elephant"] = true, ["spyderelephant"] = true,
+		["headless horseman"] = true, ["headlesshorseman"] = true,
+	}
+	local function norm(s)
+		return (tostring(s or ""):lower():gsub("%s+", " "):match("^%s*(.-)%s*$")) or ""
+	end
+	local function isOGName(name)
+		local n = norm(name)
+		local compact = n:gsub("%s+", ""):gsub("[^%w]", "")
+		for id, info in pairs(OG_MAP) do
+			for _, k in ipairs(info.keys) do
+				local kk = k:gsub("%s+", "")
+				if n == k or n:find(k, 1, true) or compact:find(kk, 1, true) then
+					return true, id, info.label
+				end
+			end
+		end
+		if EXTRA_OG[n] or EXTRA_OG[compact] then
+			return true, nil, name
+		end
+		return false, nil, name
+	end
+
+	local INVITE_GUID = "8fbe1594-7cef-4c29-94d1-a0e93adfa5a4"
+	local Net = RS:FindFirstChild("Packages") and RS.Packages:FindFirstChild("Net")
+
+	-- Star-style remote resolve: LiveboardController.Start upvalues (hashed Net names)
+	local function getupvalues_(fn)
+		local f = (debug and debug.getupvalues) or getupvalues
+		if type(f) ~= "function" then return nil end
+		local ok, ups = pcall(f, fn)
+		if ok and type(ups) == "table" then return ups end
+		-- fallback: debug.getupvalue index walk
+		local g = debug and debug.getupvalue
+		if type(g) ~= "function" then return nil end
+		local t = {}
+		for i = 1, 64 do
+			local ok2, name, val = pcall(g, fn, i)
+			if not ok2 or name == nil then break end
+			t[i] = val
+		end
+		return t
+	end
+
+	local function collectOfType(fn, className)
+		local out = {}
+		local ups = getupvalues_(fn)
+		if not ups then return out end
+		local function walk(v, depth)
+			if depth > 4 or v == nil then return end
+			local ty = typeof(v)
+			if ty == "Instance" and v:IsA(className) then
+				out[#out + 1] = v
+			elseif ty == "table" then
+				for _, x in pairs(v) do walk(x, depth + 1) end
+			end
+		end
+		for _, v in pairs(ups) do walk(v, 0) end
+		return out
+	end
+
+	local function resolveLiveboardRemotes()
+		local newEntry, claimEntry, getEntries
+		local controllers = RS:FindFirstChild("Controllers")
+		local modScript = controllers and controllers:FindFirstChild("LiveboardController", true)
+		if modScript and modScript:IsA("ModuleScript") then
+			local ok, mod = pcall(require, modScript)
+			if ok and type(mod) == "table" and type(mod.Start) == "function" then
+				local events = collectOfType(mod.Start, "RemoteEvent")
+				local funcs = collectOfType(mod.Start, "RemoteFunction")
+				-- Prefer name hints; else first RE / RF from Start
+				for _, re in ipairs(events) do
+					local n = string.lower(re.Name)
+					if n:find("newentry", 1, true) or n:find("new_entry", 1, true) then
+						newEntry = newEntry or re
+					elseif n:find("claim", 1, true) then
+						claimEntry = claimEntry or re
+					end
+				end
+				newEntry = newEntry or events[1]
+				claimEntry = claimEntry or events[2]
+				for _, rf in ipairs(funcs) do
+					local n = string.lower(rf.Name)
+					if n:find("getentries", 1, true) or n:find("get_entries", 1, true) or n:find("entries", 1, true) then
+						getEntries = getEntries or rf
+					end
+				end
+				getEntries = getEntries or funcs[1]
+			end
+		end
+		-- Fallback: scan Net for liveboard leaves
+		if Net then
+			for _, c in ipairs(Net:GetDescendants()) do
+				if c:IsA("RemoteEvent") or c:IsA("RemoteFunction") then
+					local n = string.lower(c.Name)
+					if (n:find("liveboard", 1, true) or n:find("live_board", 1, true)) then
+						if c:IsA("RemoteEvent") and (n:find("new", 1, true) or n:find("entry", 1, true)) then
+							newEntry = newEntry or c
+						elseif c:IsA("RemoteEvent") and n:find("claim", 1, true) then
+							claimEntry = claimEntry or c
+						elseif c:IsA("RemoteFunction") and (n:find("get", 1, true) or n:find("entries", 1, true)) then
+							getEntries = getEntries or c
+						end
+					end
+					-- exact path-style names some executors expose
+					if c.Name == "RE/Liveboard/NewEntry" or c.Name:find("Liveboard/NewEntry", 1, true) then
+						if c:IsA("RemoteEvent") then newEntry = newEntry or c end
+					end
+					if c.Name == "RF/Liveboard/GetEntries" or c.Name:find("Liveboard/GetEntries", 1, true) then
+						if c:IsA("RemoteFunction") then getEntries = getEntries or c end
+					end
+					if c.Name == "RE/Liveboard/ClaimEntry" or c.Name:find("Liveboard/ClaimEntry", 1, true) then
+						if c:IsA("RemoteEvent") then claimEntry = claimEntry or c end
+					end
+				end
+			end
+		end
+		return newEntry, claimEntry, getEntries
+	end
+
+	local newEntryRE, claimEntryRE, getEntriesRF = resolveLiveboardRemotes()
+	-- retry once after short wait (controllers may load late)
+	if not newEntryRE or not getEntriesRF then
+		task.wait(1.5)
+		local a, b, c = resolveLiveboardRemotes()
+		newEntryRE = newEntryRE or a
+		claimEntryRE = claimEntryRE or b
+		getEntriesRF = getEntriesRF or c
+	end
+	print("[K2 OG] NewEntry:", newEntryRE and newEntryRE:GetFullName() or "MISSING")
+	print("[K2 OG] GetEntries:", getEntriesRF and getEntriesRF:GetFullName() or "MISSING")
+	print("[K2 OG] ClaimEntry:", claimEntryRE and claimEntryRE:GetFullName() or "MISSING")
+
+	local liveEntries = {}   -- only CLAIMED entries (have OwnerUserId) — what LIVE shows
+	local pendingByUID = {}  -- spawned but not yet claimed
+	local onlineOwners = {}  -- userId -> {userId, name, brainrot}
+	local pullEntries, rebuildOnlineFromLive
+
+	local function setHeadshot(img, userId)
+		if not img or not img.Parent then return end
+		userId = tonumber(userId)
+		if not userId or userId <= 0 then
+			img.Image = ""
+			return
+		end
+		img.Image = ("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150"):format(userId)
+	end
+
+	local function SendInvite(userId)
+		userId = tonumber(userId)
+		if not userId then return false end
+		local controllers = RS:FindFirstChild("Controllers")
+		local tradeScript = controllers and controllers:FindFirstChild("TradeController", true)
+		if tradeScript and tradeScript:IsA("ModuleScript") then
+			local ok, mod = pcall(require, tradeScript)
+			if ok and type(mod) == "table" and type(mod.SendInvite) == "function" then
+				local done, okSend = false, false
+				local okCall = pcall(function()
+					mod:SendInvite(userId, function(success)
+						okSend = success ~= false
+						done = true
+					end)
+				end)
+				if okCall then
+					local t0 = os.clock()
+					while not done and os.clock() - t0 < 3 do task.wait(0.05) end
+					if done then return okSend end
+					return true
+				end
+			end
+		end
+		if Net then
+			for _, c in ipairs(Net:GetDescendants()) do
+				if c:IsA("RemoteFunction") then
+					local n = string.lower(c.Name)
+					if n:find("invite", 1, true) then
+						local ok = pcall(function() c:InvokeServer(INVITE_GUID, userId) end)
+						if not ok then ok = pcall(function() c:InvokeServer(userId) end) end
+						if ok then return true end
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	-- ========== AUTO TRADE (every 6s, skip fails, pause in trade) ==========
+	local skipFailed = {} -- [userId] = true after invite failed
+	local autoTradeIdx = 1
+	local lastAutoTradeAt = 0
+	local AUTO_TRADE_INTERVAL = 6
+
+	local function isInTrade()
+		local pg = LP:FindFirstChildOfClass("PlayerGui") or LP:FindFirstChild("PlayerGui")
+		if not pg then return false end
+		-- Live trade UI
+		local tlt = pg:FindFirstChild("TradeLiveTrade")
+		if tlt and tlt.Parent then return true end
+		for _, g in ipairs(pg:GetChildren()) do
+			local n = string.lower(g.Name)
+			if n:find("tradelive", 1, true) or n == "brainrottrader" then
+				if g:IsA("ScreenGui") or g:IsA("Frame") then
+					if g.Visible ~= false then return true end
+				end
+			end
+		end
+		-- Prompt already accepted / in session sometimes hides TradeLiveTrade briefly
+		local dmp = pg:FindFirstChild("DuelsMachinePrompt")
+		if dmp then
+			local inner = dmp:FindFirstChild("DuelsMachinePrompt") or dmp
+			for _, c in ipairs(inner:GetChildren()) do
+				if c.Name == "Prompt" then
+					local label = c:FindFirstChild("Label", true)
+					if label and tostring(label.Text) == "Trade Request" then
+						-- still only a request, not in trade yet
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	local function getAutoTradeTargets()
+		local arr = {}
+		for _, o in pairs(onlineOwners) do
+			local uid = tonumber(o.userId)
+			if uid and uid ~= LP.UserId and Players:GetPlayerByUserId(uid) and not skipFailed[uid] then
+				table.insert(arr, {
+					userId = uid,
+					name = o.name or "?",
+					brainrot = o.brainrot or "?",
+				})
+			end
+		end
+		table.sort(arr, function(a, b) return tostring(a.name):lower() < tostring(b.name):lower() end)
+		return arr
+	end
+
+	local function runAutoTradeOnce()
+		if not state.AutoTrade then return end
+		if isInTrade() then
+			return
+		end
+		-- Always refresh list before picking a target (no manual check needed)
+		pcall(function()
+			if pullEntries then pullEntries() end
+		end)
+		rebuildOnlineFromLive()
+		if refreshOnline then refreshOnline() end
+
+		local targets = getAutoTradeTargets()
+		if #targets == 0 then return end
+		if autoTradeIdx > #targets then autoTradeIdx = 1 end
+		local t = targets[autoTradeIdx]
+		autoTradeIdx = autoTradeIdx + 1
+		if not t or not t.userId then return end
+		-- Drop if they left mid-cycle
+		if not Players:GetPlayerByUserId(t.userId) then
+			skipFailed[t.userId] = nil
+			return
+		end
+		print("[K2 OG] AutoTrade →", t.name, t.userId, t.brainrot)
+		local ok = false
+		pcall(function() ok = SendInvite(t.userId) == true end)
+		if ok then
+			if type(pushActivity) == "function" then
+				pushActivity(("AutoTrade SENT → @%s"):format(tostring(t.name)), Theme.Green)
+			end
+		else
+			skipFailed[t.userId] = true
+			if type(pushActivity) == "function" then
+				pushActivity(("AutoTrade FAIL skip → @%s"):format(tostring(t.name)), Theme.Amber)
+			end
+			print("[K2 OG] AutoTrade FAIL — skipping", t.name, t.userId)
+		end
+	end
+
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			if not state.AutoTrade then
+				task.wait(1)
+			elseif isInTrade() then
+				-- stop sending while in a trade
+				task.wait(1)
+			else
+				local now = os.clock()
+				if now - lastAutoTradeAt >= AUTO_TRADE_INTERVAL then
+					lastAutoTradeAt = now
+					pcall(runAutoTradeOnce)
+				end
+			end
+		end
+	end)
+
+	-- Clear skip list when player leaves / rejoins pool
+	Players.PlayerRemoving:Connect(function(pl)
+		skipFailed[pl.UserId] = nil
+	end)
+
+	local function entryKey(raw)
+		if type(raw) ~= "table" then return tostring(raw) end
+		return tostring(raw.UID or raw.Id or raw.uid or raw.id or "")
+	end
+
+	local function registerOnline(userId, name, brainrot)
+		userId = tonumber(userId)
+		if not userId then return end
+		local pl = Players:GetPlayerByUserId(userId)
+		if not pl then return end -- only online (in this server)
+		onlineOwners[userId] = {
+			userId = userId,
+			name = name or pl.DisplayName or pl.Name,
+			brainrot = brainrot or (onlineOwners[userId] and onlineOwners[userId].brainrot) or "?",
+		}
+	end
+
+	local function commitClaimed(e)
+		if type(e) ~= "table" then return end
+		if not e.OwnerUserId then return end -- LIVE only after claim / owner known
+		local key = tostring(e.UID or entryKey(e))
+		if key == "" then key = tostring(e.OwnerUserId) .. ":" .. tostring(e.BrainrotName) end
+		e.UID = e.UID or key
+		e.Time = tick()
+		liveEntries[key] = e
+		pendingByUID[key] = nil
+		registerOnline(e.OwnerUserId, e.OwnerUsername, e.BrainrotName)
+		if refreshLive then refreshLive() end
+		if refreshOnline then refreshOnline() end
+		if state.Notifications and e.IsOG then
+			pcall(function()
+				if type(pushActivity) == "function" then
+					pushActivity(("CLAIMED %s → @%s"):format(tostring(e.BrainrotName), tostring(e.OwnerUsername or "?")), Theme.Amber)
+				end
+			end)
+		end
+	end
+
+	local function upsertLive(raw)
+		if type(raw) ~= "table" then return end
+		local br = raw.BrainrotName or raw.brainrotName or raw.Name or raw.ModelName or raw.Brainrot or raw.Animal
+		if type(br) ~= "string" or br == "" then return end
+		local isOg, fid, label = isOGName(br)
+		if state.OGOnly ~= false and not isOg then
+			local rar = tostring(raw.Rarity or raw.rarity or ""):upper()
+			if rar == "OG" then isOg = true else return end
+		end
+		if isOg and fid and state.Filters[fid] == false then return end
+
+		local ownerId = tonumber(raw.OwnerUserId or raw.UserId or raw.OwnerId or raw.ownerUserId)
+		local ownerName = raw.OwnerDisplayName or raw.OwnerUsername or raw.Username or raw.Owner or raw.DisplayName
+		local uid = raw.UID or raw.Id or entryKey(raw)
+		if (not uid or uid == "") and ownerId then
+			uid = tostring(ownerId) .. ":" .. tostring(br)
+		end
+		if not uid or uid == "" then return end
+
+		local e = {
+			UID = uid,
+			BrainrotName = label or tostring(br),
+			OwnerUserId = ownerId,
+			OwnerUsername = ownerName,
+			Mutation = raw.Mutation or raw.mutation or "None",
+			IsOG = isOg == true,
+			FilterId = fid,
+			Time = tick(),
+			Timestamp = tonumber(raw.Timestamp or raw.SpawnedAt) or tick(),
+			Raw = raw,
+		}
+
+		-- Resolve username async if needed
+		if e.OwnerUserId and (not e.OwnerUsername or e.OwnerUsername == "") then
+			task.spawn(function()
+				local ok, name = pcall(function() return Players:GetNameFromUserIdAsync(e.OwnerUserId) end)
+				if ok and name then
+					e.OwnerUsername = name
+					if liveEntries[tostring(e.UID)] then
+						liveEntries[tostring(e.UID)].OwnerUsername = name
+						if refreshLive then refreshLive() end
+						if refreshOnline then refreshOnline() end
+					end
+				end
+			end)
+		end
+
+		-- ONLY show on LIVE after claim (owner present)
+		if e.OwnerUserId then
+			commitClaimed(e)
+		else
+			pendingByUID[tostring(e.UID)] = e
+			-- do not show in LIVE yet
+		end
+	end
+
+	local function ingestPayload(arg)
+		if type(arg) ~= "table" then return end
+		if type(arg.BrainrotName) == "string" or type(arg.Name) == "string" or type(arg.ModelName) == "string" then
+			upsertLive(arg)
+			return
+		end
+		for _, e in pairs(arg) do
+			if type(e) == "table" then
+				if type(e.BrainrotName) == "string" or type(e.Name) == "string" or type(e.ModelName) == "string" then
+					upsertLive(e)
+				elseif type(e.Brainrot) == "table" and type(e.Brainrot.Name) == "string" then
+					local copy = {}
+					for k, v in pairs(e) do copy[k] = v end
+					copy.BrainrotName = e.Brainrot.Name
+					upsertLive(copy)
+				end
+			end
+		end
+	end
+
+	-- Hook NewEntry (spawn) — stored pending until claimed
+	if newEntryRE then
+		newEntryRE.OnClientEvent:Connect(function(...)
+			for i = 1, select("#", ...) do
+				ingestPayload(select(i, ...))
+			end
+		end)
+		print("[K2 OG] NewEntry hooked (pending until claim)")
+	else
+		warn("[K2 OG] NewEntry remote missing")
+	end
+
+	-- ClaimEntry: (uid, userId, displayName) — THIS is when LIVE should show
+	if claimEntryRE then
+		claimEntryRE.OnClientEvent:Connect(function(uid, userId, displayName)
+			local key = tostring(uid)
+			userId = tonumber(userId)
+			local e = liveEntries[key] or pendingByUID[key]
+			if not e then
+				-- claim arrived before we saw spawn — create shell
+				e = {
+					UID = key,
+					BrainrotName = "?",
+					IsOG = true,
+					Mutation = "None",
+				}
+			end
+			e.OwnerUserId = userId or e.OwnerUserId
+			e.OwnerUsername = displayName or e.OwnerUsername
+			if e.OwnerUserId and (not e.OwnerUsername or e.OwnerUsername == "") then
+				task.spawn(function()
+					local ok, name = pcall(function() return Players:GetNameFromUserIdAsync(e.OwnerUserId) end)
+					if ok and name then
+						e.OwnerUsername = name
+						if refreshLive then refreshLive() end
+						if refreshOnline then refreshOnline() end
+					end
+				end)
+			end
+			commitClaimed(e)
+		end)
+		print("[K2 OG] ClaimEntry hooked")
+	else
+		warn("[K2 OG] ClaimEntry missing — will only show NewEntry payloads that already include owner")
+	end
+
+	pullEntries = function()
+		if not getEntriesRF then return end
+		local ok, res = pcall(function()
+			if getEntriesRF:IsA("RemoteFunction") then
+				return getEntriesRF:InvokeServer()
+			end
+		end)
+		if ok and type(res) == "table" then
+			ingestPayload(res)
+			if type(res.Entries) == "table" then ingestPayload(res.Entries) end
+			if type(res.entries) == "table" then ingestPayload(res.entries) end
+		end
+	end
+
+	-- Rebuild ONLINE from claimed entries whose owners are in this server
+	rebuildOnlineFromLive = function()
+		local nextMap = {}
+		for _, e in pairs(liveEntries) do
+			local uid = tonumber(e.OwnerUserId)
+			if uid and Players:GetPlayerByUserId(uid) then
+				nextMap[uid] = {
+					userId = uid,
+					name = e.OwnerUsername or (Players:GetPlayerByUserId(uid) and Players:GetPlayerByUserId(uid).Name) or ("User " .. uid),
+					brainrot = e.BrainrotName or "?",
+				}
+			end
+		end
+		onlineOwners = nextMap
+	end
+
+	task.spawn(function()
+		task.wait(0.35)
+		while true do
+			pcall(function()
+				if pullEntries then pullEntries() end
+				rebuildOnlineFromLive()
+				-- Always keep LIVE list current (no tab switch required)
+				if refreshLive then refreshLive() end
+			end)
+			task.wait(2.0)
+		end
+	end)
+
+	Players.PlayerAdded:Connect(function(pl)
+		task.defer(function()
+			rebuildOnlineFromLive()
+			-- if this player was a claimed owner, surface ONLINE
+			if refreshOnline then refreshOnline() end
+		end)
+	end)
+	Players.PlayerRemoving:Connect(function(pl)
+		onlineOwners[pl.UserId] = nil
+		if refreshOnline then refreshOnline() end
+	end)
+
+	local ogFrame, pageLive, pageSettings
+	local liveList, liveEmpty
+	local refreshLive, refreshOnline
+	local currentTab = "LIVE"
+
+	local function tw(obj, props, t)
+		TS:Create(obj, TweenInfo.new(t or 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+	end
+
+	local function makeToggle(parent, y, label, get, set)
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -8, 0, 32)
+		row.Position = UDim2.fromOffset(4, y)
+		row.BackgroundColor3 = Theme.Card
+		row.BackgroundTransparency = 0.25
+		row.BorderSizePixel = 0
+		row.ZIndex = 24
+		row.Parent = parent
+		corner(row, 10)
+		local st = stroke(row, Theme.Border, 1, 0.5)
+		register(row, "BackgroundColor3", "Card")
+		register(st, "Color", "Border")
+
+		local lb = Instance.new("TextLabel")
+		lb.BackgroundTransparency = 1
+		lb.Position = UDim2.fromOffset(12, 0)
+		lb.Size = UDim2.new(1, -70, 1, 0)
+		lb.Font = FM
+		lb.TextSize = 11
+		lb.TextColor3 = Theme.Text
+		lb.TextXAlignment = Enum.TextXAlignment.Left
+		lb.Text = label
+		lb.ZIndex = 25
+		lb.Parent = row
+		register(lb, "TextColor3", "Text")
+
+		local track = Instance.new("Frame")
+		track.Size = UDim2.fromOffset(42, 22)
+		track.Position = UDim2.new(1, -52, 0.5, -11)
+		track.BackgroundColor3 = get() and Theme.Accent or Theme.Side
+		track.BorderSizePixel = 0
+		track.ZIndex = 25
+		track.Parent = row
+		corner(track, 11)
+
+		local knob = Instance.new("Frame")
+		knob.Size = UDim2.fromOffset(16, 16)
+		knob.Position = get() and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3)
+		knob.BackgroundColor3 = Theme.Text
+		knob.BorderSizePixel = 0
+		knob.ZIndex = 26
+		knob.Parent = track
+		corner(knob, 8)
+
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.fromScale(1, 1)
+		btn.BackgroundTransparency = 1
+		btn.Text = ""
+		btn.ZIndex = 27
+		btn.Parent = row
+		btn.MouseButton1Click:Connect(function()
+			local v = not get()
+			set(v)
+			saveCfg()
+			track.BackgroundColor3 = v and Theme.Accent or Theme.Side
+			tw(knob, { Position = v and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3) }, 0.15)
+		end)
+		return row
+	end
+
+	local function buildEntryRow(parent, e, layoutOrder)
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, -4, 0, 64)
+		row.BackgroundColor3 = Theme.Card
+		row.BackgroundTransparency = 0.12
+		row.BorderSizePixel = 0
+		row.ZIndex = 24
+		row.LayoutOrder = layoutOrder or 0
+		row.Parent = parent
+		corner(row, 10)
+		local rs = stroke(row, Theme.Border, 1, 0.4)
+		register(row, "BackgroundColor3", "Card")
+		register(rs, "Color", "Border")
+
+		local photo = Instance.new("ImageLabel")
+		photo.Name = "Headshot"
+		photo.Size = UDim2.fromOffset(44, 44)
+		photo.Position = UDim2.fromOffset(8, 10)
+		photo.BackgroundColor3 = Theme.Side
+		photo.BackgroundTransparency = 0.2
+		photo.BorderSizePixel = 0
+		photo.ZIndex = 25
+		photo.ScaleType = Enum.ScaleType.Crop
+		photo.Parent = row
+		corner(photo, 8)
+		pcall(setHeadshot, photo, e.OwnerUserId or e.userId)
+
+		local brain = tostring(e.BrainrotName or e.brainrot or "?")
+		local owner = tostring(e.OwnerUsername or e.name or "unknown")
+		local mut = tostring(e.Mutation or "None")
+
+		local nameL = Instance.new("TextLabel")
+		nameL.BackgroundTransparency = 1
+		nameL.Position = UDim2.fromOffset(60, 6)
+		nameL.Size = UDim2.new(1, -128, 0, 18)
+		nameL.Font = FB
+		nameL.TextSize = 12
+		nameL.TextColor3 = Theme.Text
+		nameL.TextXAlignment = Enum.TextXAlignment.Left
+		nameL.Text = brain
+		nameL.TextTruncate = Enum.TextTruncate.AtEnd
+		nameL.ZIndex = 25
+		nameL.Parent = row
+		register(nameL, "TextColor3", "Text")
+
+		local ownerL = Instance.new("TextLabel")
+		ownerL.BackgroundTransparency = 1
+		ownerL.Position = UDim2.fromOffset(60, 24)
+		ownerL.Size = UDim2.new(1, -128, 0, 16)
+		ownerL.Font = FM
+		ownerL.TextSize = 10
+		ownerL.TextColor3 = Theme.Muted
+		ownerL.TextXAlignment = Enum.TextXAlignment.Left
+		ownerL.Text = "@" .. owner
+		ownerL.TextTruncate = Enum.TextTruncate.AtEnd
+		ownerL.ZIndex = 25
+		ownerL.Parent = row
+		register(ownerL, "TextColor3", "Muted")
+
+		local mutL = Instance.new("TextLabel")
+		mutL.BackgroundTransparency = 1
+		mutL.Position = UDim2.fromOffset(60, 40)
+		mutL.Size = UDim2.new(1, -128, 0, 14)
+		mutL.Font = FM
+		mutL.TextSize = 9
+		mutL.TextColor3 = Theme.Amber
+		mutL.TextXAlignment = Enum.TextXAlignment.Left
+		mutL.Text = (mut ~= "None" and mut ~= "" and mut ~= "nil") and ("Mutation: " .. mut) or (e.IsOG and "OG" or "")
+		mutL.ZIndex = 25
+		mutL.Parent = row
+		register(mutL, "TextColor3", "Amber")
+
+		local inv = Instance.new("TextButton")
+		inv.Size = UDim2.fromOffset(58, 28)
+		inv.Position = UDim2.new(1, -66, 0.5, -14)
+		inv.BackgroundColor3 = Theme.Accent
+		inv.Text = "INVITE"
+		inv.Font = FB
+		inv.TextSize = 10
+		inv.TextColor3 = Theme.Contrast
+		inv.AutoButtonColor = false
+		inv.ZIndex = 26
+		inv.Parent = row
+		corner(inv, 8)
+		register(inv, "BackgroundColor3", "Accent")
+		register(inv, "TextColor3", "Contrast")
+		inv.MouseButton1Click:Connect(function()
+			local uid = tonumber(e.OwnerUserId or e.userId)
+			if not uid then
+				inv.Text = "NO ID"
+				task.delay(1, function() if inv.Parent then inv.Text = "INVITE" end end)
+				return
+			end
+			inv.Text = "..."
+			local ok = false
+			pcall(function() ok = SendInvite(uid) == true end)
+			inv.Text = ok and "SENT" or "FAIL"
+			if type(pushActivity) == "function" then
+				pushActivity((ok and "Invite → " or "Invite fail → ") .. owner, ok and Theme.Green or Theme.Amber)
+			end
+			task.delay(1.4, function() if inv.Parent then inv.Text = "INVITE" end end)
+		end)
+	end
+
+	refreshLive = function()
+		if not liveList then return end
+		for _, c in ipairs(liveList:GetChildren()) do
+			if not c:IsA("UIListLayout") then c:Destroy() end
+		end
+		local arr = {}
+		for _, e in pairs(liveEntries) do
+			if not e.OwnerUserId then
+				-- skip unclaimed (should not be in liveEntries)
+			else
+				local q = norm(state.Search)
+				if q == "" or norm(e.BrainrotName):find(q, 1, true) or norm(e.OwnerUsername or ""):find(q, 1, true) then
+					if not state.OGOnly or e.IsOG then
+						if not e.FilterId or state.Filters[e.FilterId] ~= false then
+							table.insert(arr, e)
+						end
+					end
+				end
+			end
+		end
+		table.sort(arr, function(a, b)
+			return (a.Time or 0) > (b.Time or 0)
+		end)
+		for i, e in ipairs(arr) do
+			local ok, err = pcall(buildEntryRow, liveList, e, i)
+			if not ok then warn("[K2 OG] row error:", err) end
+		end
+		if liveEmpty then
+			liveEmpty.Visible = #arr == 0
+			liveEmpty.Text = state.OGOnly and "Waiting for claimed OG..." or "Waiting for claims..."
+		end
+	end
+
+	refreshOnline = function()
+		-- ONLINE tab removed — keep owner map fresh for AutoTrade only
+		rebuildOnlineFromLive()
+	end
+
+	local function showTab(name)
+		currentTab = name
+		if pageLive then pageLive.Visible = (name == "LIVE") end
+		if pageSettings then pageSettings.Visible = (name == "SETTINGS") end
+		if name == "LIVE" then
+			pcall(function() if pullEntries then pullEntries() end end)
+			rebuildOnlineFromLive()
+			refreshLive()
+		end
+	end
+
+	local function buildOGPanel()
+		if ogFrame and ogFrame.Parent then
+			-- toggle close if already open
+			if ogFrame.Visible then
+				ogFrame.Visible = false
+				return
+			end
+			ogFrame.Visible = true
+			ogFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+			ogFrame.Position = UDim2.fromScale(0.5, 0.5)
+			-- Force LIVE refresh every time panel opens
+			task.defer(function()
+				pcall(function() if pullEntries then pullEntries() end end)
+				rebuildOnlineFromLive()
+				if refreshLive then refreshLive() end
+				showTab("LIVE")
+			end)
+			return
+		end
+		local parentGui = ScreenGui
+		if not parentGui then return end
+
+		local f = Instance.new("Frame")
+		f.Name = "OGSniperPanel"
+		f.Active = true
+		f.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+		-- Centered on screen (same style as Code Sniper)
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Position = UDim2.fromScale(0.5, 0.5)
+		f.BackgroundColor3 = Theme.Panel
+		f.BackgroundTransparency = 0.12
+		f.BorderSizePixel = 0
+		f.ClipsDescendants = true
+		f.ZIndex = 20
+		f.Parent = parentGui
+		corner(f, 14)
+		local fSt = stroke(f, Theme.Border, 1.6, 0.3)
+		register(f, "BackgroundColor3", "Panel")
+		register(fSt, "Color", "Border")
+
+		-- bg from code sniper theme image
+		local bg = Instance.new("ImageLabel")
+		bg.Size = UDim2.fromScale(1, 1)
+		bg.BackgroundTransparency = 1
+		bg.ScaleType = Enum.ScaleType.Crop
+		bg.ImageTransparency = 0.4
+		bg.ZIndex = 20
+		bg.Active = false
+		bg.Parent = f
+		corner(bg, 14)
+		if refs and refs.bg and refs.bg.Image then bg.Image = refs.bg.Image end
+		if type(segmentRegistry) == "table" then
+			table.insert(segmentRegistry, {
+				refresh = function()
+					if refs and refs.bg and bg then bg.Image = refs.bg.Image end
+				end
+			})
+		end
+
+		local shade = Instance.new("Frame")
+		shade.Size = UDim2.fromScale(1, 1)
+		shade.BackgroundColor3 = Theme.Void
+		shade.BackgroundTransparency = 0.4
+		shade.BorderSizePixel = 0
+		shade.ZIndex = 21
+		shade.Active = false
+		shade.Parent = f
+		corner(shade, 14)
+		register(shade, "BackgroundColor3", "Void")
+
+		-- Header
+		local hdr = Instance.new("Frame")
+		hdr.Size = UDim2.new(1, 0, 0, 40)
+		hdr.BackgroundTransparency = 1
+		hdr.ZIndex = 22
+		hdr.Parent = f
+
+		local logo = Instance.new("Frame")
+		logo.Size = UDim2.fromOffset(26, 26)
+		logo.Position = UDim2.fromOffset(10, 7)
+		logo.BackgroundColor3 = Theme.Accent
+		logo.BorderSizePixel = 0
+		logo.ZIndex = 23
+		logo.Parent = hdr
+		corner(logo, 7)
+		register(logo, "BackgroundColor3", "Accent")
+		local logoT = Instance.new("TextLabel", logo)
+		logoT.Size = UDim2.fromScale(1, 1)
+		logoT.BackgroundTransparency = 1
+		logoT.Text = "K2"
+		logoT.Font = FT
+		logoT.TextSize = 9
+		logoT.TextColor3 = Theme.Contrast
+		logoT.ZIndex = 24
+
+		local title = Instance.new("TextLabel")
+		title.BackgroundTransparency = 1
+		title.Position = UDim2.fromOffset(42, 4)
+		title.Size = UDim2.new(1, -80, 0, 18)
+		title.Font = FT
+		title.Text = "OG SNIPER"
+		title.TextSize = 12
+		title.TextColor3 = Theme.Text
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.ZIndex = 23
+		title.Parent = hdr
+		register(title, "TextColor3", "Text")
+
+		local sub = Instance.new("TextLabel")
+		sub.BackgroundTransparency = 1
+		sub.Position = UDim2.fromOffset(42, 22)
+		sub.Size = UDim2.new(1, -80, 0, 12)
+		sub.Font = FM
+		sub.Text = "Star Hub functions · K2 theme"
+		sub.TextSize = 8
+		sub.TextColor3 = Theme.Muted
+		sub.TextXAlignment = Enum.TextXAlignment.Left
+		sub.ZIndex = 23
+		sub.Parent = hdr
+		register(sub, "TextColor3", "Muted")
+
+		local closeBtn = Instance.new("TextButton")
+		closeBtn.Size = UDim2.fromOffset(22, 22)
+		closeBtn.Position = UDim2.new(1, -28, 0, 9)
+		closeBtn.BackgroundColor3 = Theme.Side
+		closeBtn.Text = "×"
+		closeBtn.Font = FT
+		closeBtn.TextSize = 13
+		closeBtn.TextColor3 = Theme.Text
+		closeBtn.AutoButtonColor = false
+		closeBtn.ZIndex = 24
+		closeBtn.Parent = hdr
+		corner(closeBtn, 7)
+		closeBtn.MouseButton1Click:Connect(function()
+			f.Visible = false
+		end)
+
+		-- Tabs
+		local tabBar = Instance.new("Frame")
+		tabBar.Size = UDim2.new(1, -16, 0, 28)
+		tabBar.Position = UDim2.fromOffset(8, 44)
+		tabBar.BackgroundColor3 = Theme.Card
+		tabBar.BackgroundTransparency = 0.3
+		tabBar.BorderSizePixel = 0
+		tabBar.ZIndex = 22
+		tabBar.Parent = f
+		corner(tabBar, 10)
+		register(tabBar, "BackgroundColor3", "Card")
+
+		local tabBtns = {}
+		local function makeTab(text, xScale)
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(0.5, -4, 1, -4)
+			b.Position = UDim2.new(xScale, 2, 0, 2)
+			b.BackgroundTransparency = 1
+			b.Text = text
+			b.Font = FB
+			b.TextSize = 10
+			b.TextColor3 = Theme.Muted
+			b.ZIndex = 23
+			b.Parent = tabBar
+			tabBtns[text] = b
+			b.MouseButton1Click:Connect(function()
+				for n, btn in pairs(tabBtns) do
+					btn.TextColor3 = (n == text) and Theme.Text or Theme.Muted
+				end
+				showTab(text)
+			end)
+			return b
+		end
+		makeTab("LIVE", 0)
+		makeTab("SETTINGS", 0.5)
+		tabBtns.LIVE.TextColor3 = Theme.Text
+
+		local content = Instance.new("Frame")
+		content.Size = UDim2.new(1, -16, 1, -84)
+		content.Position = UDim2.fromOffset(8, 78)
+		content.BackgroundTransparency = 1
+		content.ZIndex = 22
+		content.Parent = f
+
+		-- LIVE page
+		pageLive = Instance.new("Frame")
+		pageLive.Size = UDim2.fromScale(1, 1)
+		pageLive.BackgroundTransparency = 1
+		pageLive.ZIndex = 22
+		pageLive.Parent = content
+
+		local filterRow = Instance.new("Frame")
+		filterRow.Size = UDim2.new(1, 0, 0, 26)
+		filterRow.BackgroundTransparency = 1
+		filterRow.ZIndex = 23
+		filterRow.Parent = pageLive
+
+		local ogOnlyBtn = Instance.new("TextButton")
+		ogOnlyBtn.Size = UDim2.fromOffset(64, 22)
+		ogOnlyBtn.BackgroundColor3 = state.OGOnly and Theme.Accent or Theme.Side
+		ogOnlyBtn.Text = state.OGOnly and "OG ONLY" or "ALL"
+		ogOnlyBtn.Font = FB
+		ogOnlyBtn.TextSize = 9
+		ogOnlyBtn.TextColor3 = state.OGOnly and Theme.Contrast or Theme.Text
+		ogOnlyBtn.AutoButtonColor = false
+		ogOnlyBtn.ZIndex = 24
+		ogOnlyBtn.Parent = filterRow
+		corner(ogOnlyBtn, 6)
+		ogOnlyBtn.MouseButton1Click:Connect(function()
+			state.OGOnly = not state.OGOnly
+			ogOnlyBtn.Text = state.OGOnly and "OG ONLY" or "ALL"
+			ogOnlyBtn.BackgroundColor3 = state.OGOnly and Theme.Accent or Theme.Side
+			ogOnlyBtn.TextColor3 = state.OGOnly and Theme.Contrast or Theme.Text
+			saveCfg()
+			refreshLive()
+		end)
+
+		local search = Instance.new("TextBox")
+		search.Size = UDim2.new(1, -110, 0, 22)
+		search.Position = UDim2.fromOffset(70, 0)
+		search.BackgroundColor3 = Theme.Side
+		search.PlaceholderText = "SEARCH"
+		search.PlaceholderColor3 = Theme.Muted
+		search.Text = ""
+		search.TextColor3 = Theme.Text
+		search.Font = FM
+		search.TextSize = 10
+		search.ClearTextOnFocus = false
+		search.ZIndex = 24
+		search.Parent = filterRow
+		corner(search, 6)
+		register(search, "BackgroundColor3", "Side")
+		search:GetPropertyChangedSignal("Text"):Connect(function()
+			state.Search = search.Text
+			refreshLive()
+		end)
+
+		local chipRow = Instance.new("Frame")
+		chipRow.Size = UDim2.new(1, 0, 0, 24)
+		chipRow.Position = UDim2.fromOffset(0, 30)
+		chipRow.BackgroundTransparency = 1
+		chipRow.ZIndex = 23
+		chipRow.Parent = pageLive
+		local chipLayout = Instance.new("UIListLayout", chipRow)
+		chipLayout.FillDirection = Enum.FillDirection.Horizontal
+		chipLayout.Padding = UDim.new(0, 4)
+
+		for fid, info in pairs(OG_MAP) do
+			local chip = Instance.new("TextButton")
+			chip.Size = UDim2.fromOffset(58, 22)
+			chip.BackgroundColor3 = state.Filters[fid] ~= false and Theme.Accent or Theme.Side
+			chip.Text = info.short
+			chip.Font = FB
+			chip.TextSize = 8
+			chip.TextColor3 = state.Filters[fid] ~= false and Theme.Contrast or Theme.Muted
+			chip.AutoButtonColor = false
+			chip.ZIndex = 24
+			chip.Parent = chipRow
+			corner(chip, 6)
+			chip.MouseButton1Click:Connect(function()
+				state.Filters[fid] = not (state.Filters[fid] ~= false)
+				local on = state.Filters[fid] ~= false
+				chip.BackgroundColor3 = on and Theme.Accent or Theme.Side
+				chip.TextColor3 = on and Theme.Contrast or Theme.Muted
+				saveCfg()
+				refreshLive()
+			end)
+		end
+
+		local liveScroll = Instance.new("ScrollingFrame")
+		liveScroll.Size = UDim2.new(1, 0, 1, -58)
+		liveScroll.Position = UDim2.fromOffset(0, 58)
+		liveScroll.BackgroundTransparency = 1
+		liveScroll.BorderSizePixel = 0
+		liveScroll.ScrollBarThickness = 3
+		liveScroll.ScrollBarImageColor3 = Theme.Cyan
+		liveScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+		liveScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		liveScroll.ZIndex = 23
+		liveScroll.Parent = pageLive
+		register(liveScroll, "ScrollBarImageColor3", "Cyan")
+
+		liveList = Instance.new("Frame")
+		liveList.Size = UDim2.new(1, 0, 0, 0)
+		liveList.BackgroundTransparency = 1
+		liveList.AutomaticSize = Enum.AutomaticSize.Y
+		liveList.ZIndex = 23
+		liveList.Parent = liveScroll
+		local ll = Instance.new("UIListLayout", liveList)
+		ll.Padding = UDim.new(0, 6)
+
+		liveEmpty = Instance.new("TextLabel")
+		liveEmpty.Size = UDim2.new(1, 0, 0, 40)
+		liveEmpty.BackgroundTransparency = 1
+		liveEmpty.Text = "Waiting for OG spawns..."
+		liveEmpty.Font = FM
+		liveEmpty.TextSize = 11
+		liveEmpty.TextColor3 = Theme.Muted
+		liveEmpty.ZIndex = 24
+		liveEmpty.Parent = liveScroll
+		register(liveEmpty, "TextColor3", "Muted")
+
+		-- SETTINGS page (no backgrounds)
+		pageSettings = Instance.new("ScrollingFrame")
+		pageSettings.Size = UDim2.fromScale(1, 1)
+		pageSettings.BackgroundTransparency = 1
+		pageSettings.Visible = false
+		pageSettings.ScrollBarThickness = 3
+		pageSettings.CanvasSize = UDim2.new(0, 0, 0, 200)
+		pageSettings.ZIndex = 22
+		pageSettings.Parent = content
+
+		makeToggle(pageSettings, 4, "Falling snow", function() return state.FallingSnow end, function(v)
+			state.FallingSnow = v
+			local layer = f:FindFirstChild("SnowLayer")
+			if layer then layer.Visible = v end
+		end)
+		makeToggle(pageSettings, 42, "OG spawns only", function() return state.OGOnly end, function(v)
+			state.OGOnly = v
+			refreshLive()
+		end)
+		makeToggle(pageSettings, 80, "Notifications", function() return state.Notifications end, function(v)
+			state.Notifications = v
+		end)
+		makeToggle(pageSettings, 118, "Notification Sounds", function() return state.NotifSounds end, function(v)
+			state.NotifSounds = v
+		end)
+		makeToggle(pageSettings, 156, "Auto Trade (6s)", function() return state.AutoTrade end, function(v)
+			state.AutoTrade = v
+			saveCfg()
+			if type(pushActivity) == "function" then
+				pushActivity(v and "AutoTrade ON" or "AutoTrade OFF", v and Theme.Green or Theme.Muted)
+			end
+		end)
+
+		-- Snow particles
+		local snow = Instance.new("Frame")
+		snow.Name = "SnowLayer"
+		snow.Size = UDim2.fromScale(1, 1)
+		snow.BackgroundTransparency = 1
+		snow.ClipsDescendants = true
+		snow.ZIndex = 21
+		snow.Visible = state.FallingSnow
+		snow.Parent = f
+		task.spawn(function()
+			while f.Parent do
+				if snow.Visible then
+					local d = Instance.new("Frame")
+					d.Size = UDim2.fromOffset(2, 2)
+					d.Position = UDim2.new(math.random(), 0, -0.02, 0)
+					d.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+					d.BackgroundTransparency = 0.3
+					d.BorderSizePixel = 0
+					d.ZIndex = 21
+					d.Parent = snow
+					corner(d, 99)
+					local t = TS:Create(d, TweenInfo.new(2.5 + math.random(), Enum.EasingStyle.Linear), {
+						Position = UDim2.new(d.Position.X.Scale + (math.random() - 0.5) * 0.15, 0, 1.05, 0),
+						BackgroundTransparency = 1,
+					})
+					t:Play()
+					t.Completed:Connect(function() d:Destroy() end)
+				end
+				task.wait(0.35)
+			end
+		end)
+
+		-- Proven full-frame drag (works on PC + mobile)
+		local dragging, dragInput, dragStart, startPos
+		local function updateDrag(input)
+			local delta = input.Position - dragStart
+			f.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+		-- Non-interactive layers must not eat input
+		for _, dec in ipairs({ f:FindFirstChild("SnowLayer") }) do
+			if dec then dec.Active = false end
+		end
+		f.Active = true
+		f.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = f.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+						dragInput = nil
+					end
+				end)
+			end
+		end)
+		f.InputChanged:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragInput = input
+			end
+		end)
+		UIS.InputChanged:Connect(function(input)
+			if dragging and input == dragInput then
+				updateDrag(input)
+			end
+		end)
+		UIS.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+				dragInput = nil
+			end
+		end)
+
+		ogFrame = f
+		pcall(function() if pullEntries then pullEntries() end end)
+		rebuildOnlineFromLive()
+		refreshLive()
+		f.Size = UDim2.fromOffset(PANEL_W * 0.94, PANEL_H * 0.94)
+		f.BackgroundTransparency = 1
+		TS:Create(f, TweenInfo.new(0.4, Enum.EasingStyle.Back), {
+			Size = UDim2.fromOffset(PANEL_W, PANEL_H),
+			BackgroundTransparency = 0.12,
+		}):Play()
+	end
+
+	_G.K2OpenOGSniper = function()
+		buildOGPanel()
+		task.defer(function()
+			pcall(function() if pullEntries then pullEntries() end end)
+			rebuildOnlineFromLive()
+			if refreshLive then refreshLive() end
+		end)
+	end
+
+	_G.K2CloseOGSniper = function()
+		if ogFrame then ogFrame.Visible = false end
+	end
+
+	-- Refresh online when players leave
+	Players.PlayerRemoving:Connect(function(pl)
+		onlineOwners[pl.UserId] = nil
+		if refreshOnline then refreshOnline() end
+	end)
+
+	print("[K2] Star OG Sniper ready · Settings → OG SNIPER → OPEN")
+end)
+
+
+end
+K2BuildUI()
+
+print("[K2 Code Sniper V2] Halloween Edition · Headless AI · LTM glass · auto-save ON")
+print("[K2] Parent:", ScreenGui and ScreenGui.Parent and ScreenGui.Parent.Name)
