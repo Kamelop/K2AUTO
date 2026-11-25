@@ -10288,27 +10288,21 @@ end
 ------------------------------------------------------------
 -- NOTIFICATION REMOTE (Traced source — not PlayerGui scan)
 ------------------------------------------------------------
+local _cachedNotificationRemote = nil
 local function getNotificationRemote()
-	local rs = game:GetService("ReplicatedStorage")
-	local controllers = rs:FindFirstChild("Controllers")
-	if not controllers then return nil end
-	local ok, mod = pcall(function()
-		return require(controllers:FindFirstChild("NotificationController", true))
-	end)
-	if not ok or type(mod) ~= "table" or type(mod.Start) ~= "function" then
-		return nil
+	if _cachedNotificationRemote and _cachedNotificationRemote.Parent then
+		return _cachedNotificationRemote
 	end
-	local getupvalues_ = (debug and debug.getupvalues) or getupvalues
-	if not getupvalues_ then return nil end
-	local ok2, ups = pcall(getupvalues_, mod.Start)
-	if not ok2 or type(ups) ~= "table" then return nil end
+	local rs = game:GetService("ReplicatedStorage")
 	local packages = rs:FindFirstChild("Packages")
 	local net = packages and packages:FindFirstChild("Net")
-	for _, v in pairs(ups) do
-		if typeof(v) == "Instance" and (v:IsA("RemoteEvent") or v:IsA("UnreliableRemoteEvent")) then
-			if not net or v.Parent == net then
-				return v
-			end
+	if not net then return nil end
+	-- Resolve by remote name without requiring NotificationController.
+	for _, obj in ipairs(net:GetDescendants()) do
+		if (obj:IsA("RemoteEvent") or obj:IsA("UnreliableRemoteEvent"))
+			and obj.Name:lower():find("notification", 1, true) then
+			_cachedNotificationRemote = obj
+			return obj
 		end
 	end
 	return nil
