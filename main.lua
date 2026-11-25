@@ -10544,19 +10544,20 @@ local function onAnnounce(rawText, positionHint)
 			local n = #bufferedParts
 			if n == 0 then return end
 
-			-- AUTO REDEEM ON #: flush early when latest word ends with a digit
+			-- The selected listen-word count is authoritative.
+			-- AUTO REDEEM ON # must not bypass the configured word count.
 			local numberForce = false
-			if _G.AutoRedeemOnNumber then
+			if _G.AutoRedeemOnNumber and n >= need then
 				local last = bufferedParts[n]
 				if endsWithDigit(last) then
 					numberForce = true
 				end
 			end
 
-			local shouldFlush = numberForce or (n >= need)
+			local shouldFlush = n >= need
 			if not shouldFlush then return end
 
-			local take = numberForce and n or need
+			local take = need
 			local parts = {}
 			for i = 1, take do parts[i] = bufferedParts[i] end
 			local overflow = {}
@@ -12655,7 +12656,7 @@ local function stepper(parent, y, label, getV, setV, minV, maxV)
 		if _G.K2SniperScheduleSave then _G.K2SniperScheduleSave() end
 	end)
 end
-stepper(PageSettings, 430, "Submit After (words)", function() return _G.SubmitAfterCount end, function(v) _G.SubmitAfterCount = v; if updateCounters then updateCounters() end end, 1, 20)
+stepper(PageSettings, 430, "Listen For (words)", function() return _G.SubmitAfterCount end, function(v) _G.SubmitAfterCount = v; if updateCounters then updateCounters() end end, 1, 20)
 
 
 -- Type speed
