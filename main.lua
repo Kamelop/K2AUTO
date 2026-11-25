@@ -146,7 +146,7 @@ _G.TypeSpeed = "Fast"   -- Fast | Normal
 _G.TrackersEnabled = true -- always on (toggle removed)
 _G.AnchorEnabled = false
 _G.AutoBuyEnabled = false
-_G.RethinkInvalid = true   -- Headless: re-ask AI for backup answer on invalid
+_G.RethinkInvalid = false  -- Disabled by default during freeze isolation; enable manually if needed
 _G.RethinkMax = 2          -- max alternate attempts per riddle
 _G.BlockEventsEnabled = false -- Block All Events (EventController)
 
@@ -13825,23 +13825,12 @@ task.spawn(function()
 		onlineOwners = nextMap
 	end
 
-	task.spawn(function()
-		if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("OG_POLL", "Background liveboard polling started; panel visibility does not gate this loop") end
-		task.wait(0.35)
-		while true do
-			local cycleStarted = os.clock()
-			local cycleOk, cycleErr = pcall(function()
-				if pullEntries then pullEntries() end
-				rebuildOnlineFromLive()
-				if refreshLive then refreshLive() end
-			end)
-			local cycleElapsed = os.clock() - cycleStarted
-			if _G.K2DiagnosticsLog and (not cycleOk or cycleElapsed >= 1) then
-				_G.K2DiagnosticsLog("OG_POLL", string.format("Polling cycle %.2fs; ok=%s%s", cycleElapsed, tostring(cycleOk), cycleOk and "" or "; error=" .. tostring(cycleErr)))
-			end
-			task.wait(2.0)
-		end
-	end)
+	-- Disabled automatic liveboard polling during freeze isolation.
+	-- Manual actions can still call pullEntries(); this prevents an always-on
+	-- RemoteFunction request and list rebuild while the OG panel is unused.
+	if _G.K2DiagnosticsLog then
+		_G.K2DiagnosticsLog("OG_POLL", "Automatic background polling disabled for stability test")
+	end
 
 	Players.PlayerAdded:Connect(function(pl)
 		task.defer(function()
