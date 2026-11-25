@@ -13125,16 +13125,19 @@ task.spawn(function()
 end)
 
 -- Open animation (no full-screen intro)
+if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("GUI", "About to show MainFrame") end
 MainFrame.Visible = true
 MainFrame.Size = UDim2.fromOffset(PANEL_W * 0.94, PANEL_H * 0.94)
 MainFrame.BackgroundTransparency = 1
 tw(MainFrame, {Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency = 0.16}, TIB)
+if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("GUI", "MainFrame shown; opening tween started") end
 
 -- Load bg + mood
 task.spawn(function()
 	local startIdx = math.clamp(tonumber(_G.K2SniperBgIndex) or 1, 1, #BG_URLS)
-	local asset = resolveBg(BG_URLS[startIdx], startIdx)
 	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("BG_LOAD", "Background asset load started") end
+	local asset = resolveBg(BG_URLS[startIdx], startIdx)
+	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("BG_LOAD", "Background asset load finished; asset=" .. tostring(asset ~= nil)) end
 	if asset and refs.bg then
 		refs.bg.Image = asset
 		refs.bg.Visible = true
