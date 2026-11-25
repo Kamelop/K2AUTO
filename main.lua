@@ -11148,6 +11148,23 @@ _G.K2OpenTestSender = buildTestSender
 local function startNotificationListener()
 	local conns = {}
 	local remote = getNotificationRemote()
+
+	-- Confirmed announcement source from the detector log:
+	-- ReplicatedStorage.Packages.Net.RE_Announcement
+	local announcementRemote
+	pcall(function()
+		local packages = RS:FindFirstChild("Packages")
+		local net = packages and packages:FindFirstChild("Net")
+		local candidate = net and net:FindFirstChild("RE_Announcement")
+		if candidate and (candidate:IsA("RemoteEvent") or candidate:IsA("UnreliableRemoteEvent")) then
+			announcementRemote = candidate
+		end
+	end)
+	if announcementRemote and announcementRemote ~= remote then
+		conns[#conns + 1] = announcementRemote.OnClientEvent:Connect(onAnnounceDebounced)
+		pushActivity("RE_Announcement source OK", Theme.Green)
+	end
+
 	if remote then
 		conns[#conns + 1] = remote.OnClientEvent:Connect(onAnnounceDebounced)
 		setStatus("● READY", "Notify remote mapped", "ok")
@@ -11159,14 +11176,14 @@ local function startNotificationListener()
 		local n = 0
 		if net then
 			for _, child in ipairs(net:GetChildren()) do
-				if child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent") then
+				if child ~= announcementRemote and (child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent")) then
 					n = n + 1
 					conns[#conns + 1] = child.OnClientEvent:Connect(onAnnounceDebounced)
 					if n >= 200 then break end
 				end
 			end
 			conns[#conns + 1] = net.ChildAdded:Connect(function(child)
-				if child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent") then
+				if child ~= announcementRemote and (child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent")) then
 					conns[#conns + 1] = child.OnClientEvent:Connect(onAnnounceDebounced)
 				end
 			end)
