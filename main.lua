@@ -13407,33 +13407,7 @@ task.spawn(function()
 
 	local function resolveLiveboardRemotes()
 		local newEntry, claimEntry, getEntries
-		local controllers = RS:FindFirstChild("Controllers")
-		local modScript = controllers and controllers:FindFirstChild("LiveboardController", true)
-		if modScript and modScript:IsA("ModuleScript") then
-			local ok, mod = pcall(require, modScript)
-			if ok and type(mod) == "table" and type(mod.Start) == "function" then
-				local events = collectOfType(mod.Start, "RemoteEvent")
-				local funcs = collectOfType(mod.Start, "RemoteFunction")
-				-- Prefer name hints; else first RE / RF from Start
-				for _, re in ipairs(events) do
-					local n = string.lower(re.Name)
-					if n:find("newentry", 1, true) or n:find("new_entry", 1, true) then
-						newEntry = newEntry or re
-					elseif n:find("claim", 1, true) then
-						claimEntry = claimEntry or re
-					end
-				end
-				newEntry = newEntry or events[1]
-				claimEntry = claimEntry or events[2]
-				for _, rf in ipairs(funcs) do
-					local n = string.lower(rf.Name)
-					if n:find("getentries", 1, true) or n:find("get_entries", 1, true) or n:find("entries", 1, true) then
-						getEntries = getEntries or rf
-					end
-				end
-				getEntries = getEntries or funcs[1]
-			end
-		end
+		-- Never require game-owned controllers. Resolve only exposed remotes.
 		-- Fallback: scan Net for liveboard leaves
 		if Net then
 			for _, c in ipairs(Net:GetDescendants()) do
@@ -13495,26 +13469,7 @@ task.spawn(function()
 	local function SendInvite(userId)
 		userId = tonumber(userId)
 		if not userId then return false end
-		local controllers = RS:FindFirstChild("Controllers")
-		local tradeScript = controllers and controllers:FindFirstChild("TradeController", true)
-		if tradeScript and tradeScript:IsA("ModuleScript") then
-			local ok, mod = pcall(require, tradeScript)
-			if ok and type(mod) == "table" and type(mod.SendInvite) == "function" then
-				local done, okSend = false, false
-				local okCall = pcall(function()
-					mod:SendInvite(userId, function(success)
-						okSend = success ~= false
-						done = true
-					end)
-				end)
-				if okCall then
-					local t0 = os.clock()
-					while not done and os.clock() - t0 < 3 do task.wait(0.05) end
-					if done then return okSend end
-					return true
-				end
-			end
-		end
+		-- Avoid requiring TradeController from the executor context.
 		if Net then
 			for _, c in ipairs(Net:GetDescendants()) do
 				if c:IsA("RemoteFunction") then
