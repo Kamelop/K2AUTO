@@ -13792,11 +13792,16 @@ task.spawn(function()
 
 	pullEntries = function()
 		if not getEntriesRF then return end
+		local started = os.clock()
 		local ok, res = pcall(function()
 			if getEntriesRF:IsA("RemoteFunction") then
 				return getEntriesRF:InvokeServer()
 			end
 		end)
+		local elapsed = os.clock() - started
+		if _G.K2DiagnosticsLog and (not ok or elapsed >= 1) then
+			_G.K2DiagnosticsLog("OG_REMOTE", string.format("GetEntries InvokeServer %.2fs; ok=%s; result=%s", elapsed, tostring(ok), typeof(res)))
+		end
 		if ok and type(res) == "table" then
 			ingestPayload(res)
 			if type(res.Entries) == "table" then ingestPayload(res.Entries) end
@@ -13821,14 +13826,19 @@ task.spawn(function()
 	end
 
 	task.spawn(function()
+		if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("OG_POLL", "Background liveboard polling started; panel visibility does not gate this loop") end
 		task.wait(0.35)
 		while true do
-			pcall(function()
+			local cycleStarted = os.clock()
+			local cycleOk, cycleErr = pcall(function()
 				if pullEntries then pullEntries() end
 				rebuildOnlineFromLive()
-				-- Always keep LIVE list current (no tab switch required)
 				if refreshLive then refreshLive() end
 			end)
+			local cycleElapsed = os.clock() - cycleStarted
+			if _G.K2DiagnosticsLog and (not cycleOk or cycleElapsed >= 1) then
+				_G.K2DiagnosticsLog("OG_POLL", string.format("Polling cycle %.2fs; ok=%s%s", cycleElapsed, tostring(cycleOk), cycleOk and "" or "; error=" .. tostring(cycleErr)))
+			end
 			task.wait(2.0)
 		end
 	end)
