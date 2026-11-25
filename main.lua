@@ -7,6 +7,66 @@
   - Actual code/riddle from NEXT message after arm
 ]]
 
+
+-- ========== FREEZE / CRASH DIAGNOSTICS ==========
+do
+	local g = (getgenv and getgenv()) or _G
+	local fileName = "K2AUTO_diagnostics.log"
+	local buffer = g.K2DiagnosticsBuffer
+	if type(buffer) ~= "table" then buffer = {}; g.K2DiagnosticsBuffer = buffer end
+	local function persist()
+		local ok = false
+		pcall(function()
+			local append = appendfile or (syn and syn.appendfile)
+			if type(append) == "function" then append(fileName, buffer[#buffer] .. "\n"); ok = true end
+		end)
+		if not ok then pcall(function()
+			local write = writefile or (syn and syn.writefile)
+			if type(write) == "function" then write(fileName, table.concat(buffer, "\n") .. "\n") end
+		end) end
+	end
+	local function log(kind, message)
+		local line = string.format("[%s] [%s] %s", os.date("!%Y-%m-%dT%H:%M:%SZ"), tostring(kind), tostring(message))
+		buffer[#buffer + 1] = line
+		while #buffer > 150 do table.remove(buffer, 1) end
+		persist()
+		pcall(function() print("[K2 DIAG] " .. line) end)
+	end
+	g.K2DiagnosticsLog = log
+	g.K2DiagnosticsGet = function() return table.concat(buffer, "\n") end
+	log("START", "Diagnostics attached; file=" .. fileName)
+	pcall(function()
+		game:GetService("LogService").MessageOut:Connect(function(message, messageType)
+			if messageType == Enum.MessageType.MessageError then log("LUA_ERROR", message) end
+		end)
+	end)
+	local function watchSignal(signal, label, threshold)
+		local last = os.clock()
+		signal:Connect(function()
+			local now = os.clock()
+			local gap = now - last
+			if gap >= threshold then log(label .. "_STALL", string.format("%.2fs gap; callback resumed", gap)) end
+			last = now
+		end)
+	end
+	pcall(function()
+		local rs = game:GetService("RunService")
+		watchSignal(rs.Heartbeat, "HEARTBEAT", 3)
+		watchSignal(rs.RenderStepped, "RENDER", 3)
+	end)
+	task.spawn(function()
+		local last = os.clock()
+		while true do
+			task.wait(1)
+			local now = os.clock()
+			local gap = now - last
+			if gap >= 3 then log("SCHEDULER_STALL", string.format("%.2fs gap; task scheduler resumed", gap)) end
+			last = now
+		end
+	end)
+end
+
+
 repeat task.wait() until game:IsLoaded()
 -- Allow re-execute: wipe previous GUI if still present
 pcall(function()
@@ -13074,6 +13134,7 @@ tw(MainFrame, {Size = UDim2.fromOffset(PANEL_W, PANEL_H), BackgroundTransparency
 task.spawn(function()
 	local startIdx = math.clamp(tonumber(_G.K2SniperBgIndex) or 1, 1, #BG_URLS)
 	local asset = resolveBg(BG_URLS[startIdx], startIdx)
+	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("BG_LOAD", "Background asset load started") end
 	if asset and refs.bg then
 		refs.bg.Image = asset
 		refs.bg.Visible = true
@@ -14407,7 +14468,17 @@ end)
 
 
 end
-K2BuildUI()
+if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("UI_BUILD", "Starting K2BuildUI") end
+local _k2BuildOk, _k2BuildErr = xpcall(K2BuildUI, function(err)
+	local trace = debug and debug.traceback and debug.traceback(tostring(err), 2) or tostring(err)
+	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("FATAL_UI_ERROR", trace) end
+	return trace
+end)
+if _k2BuildOk then
+	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("UI_BUILD", "K2BuildUI returned successfully") end
+else
+	warn("[K2] UI build failed; see K2AUTO_diagnostics.log")
+end
 
 print("[K2 Code Sniper V2] Halloween Edition · Headless AI · LTM glass · auto-save ON")
 print("[K2] Parent:", ScreenGui and ScreenGui.Parent and ScreenGui.Parent.Name)
