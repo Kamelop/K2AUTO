@@ -9247,14 +9247,14 @@ local function liveScanGame()
 	end)
 end
 
-task.spawn(function()
-	pcall(liveScanGame)
-	-- re-scan later in case modules replicate late
-	task.wait(4)
-	pcall(liveScanGame)
-	task.wait(10)
-	pcall(liveScanGame)
-end)
+-- Disabled automatic game-module scraping.
+-- The previous scanner recursively required arbitrary client ModuleScripts
+-- (including CmdrClient / ConchTypes), causing execution-context errors and
+-- heavy startup work. Keep the LIVE catalog passive rather than requiring
+-- unrelated game modules from the executor context.
+if _G.K2DiagnosticsLog then
+	_G.K2DiagnosticsLog("LIVE_SCAN", "Automatic ModuleScript scan disabled to prevent client-context errors and stalls")
+end
 
 local function liveFindBrainrot(query)
 	if not query or query == "" then return nil end
