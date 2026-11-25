@@ -11644,24 +11644,38 @@ ScreenGui.IgnoreGuiInset = true
 ScreenGui.DisplayOrder = 1000
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 do
+	-- Parent the visible UI to PlayerGui first. On some iOS executor builds,
+	-- gethui/CoreGui accepts the ScreenGui but does not render it in the game view.
 	local parented = false
+	local pg = nil
 	pcall(function()
-		if gethui then ScreenGui.Parent = gethui(); parented = ScreenGui.Parent ~= nil end
+		pg = LP and (LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 10))
+		if pg then
+			ScreenGui.Parent = pg
+			parented = ScreenGui.Parent == pg
+		end
 	end)
 	if not parented then
 		pcall(function()
-			if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
-			ScreenGui.Parent = game:GetService("CoreGui")
-			parented = ScreenGui.Parent ~= nil
+			if gethui then
+				local hui = gethui()
+				if hui then ScreenGui.Parent = hui; parented = ScreenGui.Parent ~= nil end
+			end
 		end)
 	end
 	if not parented then
 		pcall(function()
-			local pg = LP and (LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5))
-			if pg then ScreenGui.Parent = pg end
+			if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+			local core = game:GetService("CoreGui")
+			ScreenGui.Parent = core
+			parented = ScreenGui.Parent == core
 		end)
 	end
-	getgenv().K2CodeSniperGui = ScreenGui
+	local g = (getgenv and getgenv()) or _G
+	g.K2CodeSniperGui = ScreenGui
+	if _G.K2DiagnosticsLog then
+		_G.K2DiagnosticsLog("GUI_PARENT", "parented=" .. tostring(parented) .. "; parent=" .. tostring(ScreenGui.Parent and ScreenGui.Parent.Name or "nil"))
+	end
 end
 
 -- ========== MAIN FRAME (Duels layered glass) ==========
