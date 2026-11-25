@@ -8,64 +8,110 @@
 ]]
 
 
--- ========== FREEZE / CRASH DIAGNOSTICS ==========
+-- ========== FREEZE / CRASH DIAGNOSTICS v2 ==========
 do
 	local g = (getgenv and getgenv()) or _G
 	local fileName = "K2AUTO_diagnostics.log"
 	local buffer = g.K2DiagnosticsBuffer
-	if type(buffer) ~= "table" then buffer = {}; g.K2DiagnosticsBuffer = buffer end
-	local function persist()
-		local ok = false
-		pcall(function()
-			local append = appendfile or (syn and syn.appendfile)
-			if type(append) == "function" then append(fileName, buffer[#buffer] .. "\n"); ok = true end
-		end)
-		if not ok then pcall(function()
-			local write = writefile or (syn and syn.writefile)
-			if type(write) == "function" then write(fileName, table.concat(buffer, "\n") .. "\n") end
-		end) end
+	if type(buffer) ~= "table" then
+		buffer = {}
+		g.K2DiagnosticsBuffer = buffer
 	end
+
+	local function persist()
+		local append = appendfile or (syn and syn.appendfile)
+		if type(append) == "function" then
+			local ok = pcall(append, fileName, buffer[#buffer] .. "\n")
+			if ok then return true end
+		end
+		local write = writefile or (syn and syn.writefile)
+		if type(write) == "function" then
+			local ok = pcall(write, fileName, table.concat(buffer, "\n") .. "\n")
+			if ok then return true end
+		end
+		return false
+	end
+
 	local function log(kind, message)
-		local line = string.format("[%s] [%s] %s", os.date("!%Y-%m-%dT%H:%M:%SZ"), tostring(kind), tostring(message))
+		local ok, line = pcall(function()
+			return string.format("[%s] [%s] %s", os.date("!%Y-%m-%dT%H:%M:%SZ"), tostring(kind), tostring(message))
+		end)
+		if not ok then line = "[TIME_UNKNOWN] [" .. tostring(kind) .. "] " .. tostring(message) end
 		buffer[#buffer + 1] = line
 		while #buffer > 150 do table.remove(buffer, 1) end
-		persist()
+		local saved = persist()
 		pcall(function() print("[K2 DIAG] " .. line) end)
+		return saved
 	end
+
+	local function getLog()
+		return table.concat(buffer, "\n")
+	end
+
+	-- Publish into both environments: the rest of this script uses _G,
+	-- while some executors expose a separate getgenv() table.
 	g.K2DiagnosticsLog = log
-	g.K2DiagnosticsGet = function() return table.concat(buffer, "\n") end
-	log("START", "Diagnostics attached; file=" .. fileName)
-	pcall(function()
-		game:GetService("LogService").MessageOut:Connect(function(message, messageType)
-			if messageType == Enum.MessageType.MessageError then log("LUA_ERROR", message) end
-		end)
-	end)
-	local function watchSignal(signal, label, threshold)
-		local last = os.clock()
-		signal:Connect(function()
-			local now = os.clock()
-			local gap = now - last
-			if gap >= threshold then log(label .. "_STALL", string.format("%.2fs gap; callback resumed", gap)) end
-			last = now
-		end)
+	g.K2DiagnosticsGet = getLog
+	_G.K2DiagnosticsLog = log
+	_G.K2DiagnosticsGet = getLog
+
+	local saved = log("START", "Diagnostics v2 attached; file=" .. fileName)
+	if not saved then
+		pcall(function() print("[K2 DIAG] WARNING: file APIs unavailable or write failed; log is memory-only") end)
 	end
+
+	local function connectSignal(signal, label, threshold)
+		if not signal then
+			log("MONITOR_UNAVAILABLE", label .. " signal missing")
+			return
+		end
+		local ok, err = pcall(function()
+			local last = os.clock()
+			signal:Connect(function()
+				local now = os.clock()
+				local gap = now - last
+				if gap >= threshold then
+					log(label .. "_STALL", string.format("%.2fs gap; callback resumed", gap))
+				end
+				last = now
+			end)
+		end)
+		if ok then
+			log("MONITOR_ATTACHED", label)
+		else
+			log("MONITOR_ERROR", label .. ": " .. tostring(err))
+		end
+	end
+
+	pcall(function()
+		local logService = game:GetService("LogService")
+		logService.MessageOut:Connect(function(message, messageType)
+			if messageType == Enum.MessageType.MessageError then
+				log("LUA_ERROR", message)
+			end
+		end)
+		log("MONITOR_ATTACHED", "LogService.MessageOut")
+	end)
+
 	pcall(function()
 		local rs = game:GetService("RunService")
-		watchSignal(rs.Heartbeat, "HEARTBEAT", 3)
-		watchSignal(rs.RenderStepped, "RENDER", 3)
+		connectSignal(rs.Heartbeat, "HEARTBEAT", 3)
+		connectSignal(rs.PreRender or rs.RenderStepped, "RENDER", 3)
 	end)
+
 	task.spawn(function()
 		local last = os.clock()
 		while true do
 			task.wait(1)
 			local now = os.clock()
 			local gap = now - last
-			if gap >= 3 then log("SCHEDULER_STALL", string.format("%.2fs gap; task scheduler resumed", gap)) end
+			if gap >= 3 then
+				log("SCHEDULER_STALL", string.format("%.2fs gap; task scheduler resumed", gap))
+			end
 			last = now
 		end
 	end)
 end
-
 
 repeat task.wait() until game:IsLoaded()
 -- Allow re-execute: wipe previous GUI if still present
