@@ -14488,8 +14488,49 @@ end)
 if _k2BuildOk then
 	if _G.K2DiagnosticsLog then _G.K2DiagnosticsLog("UI_BUILD", "K2BuildUI returned successfully") end
 else
-	warn("[K2] UI build failed; see K2AUTO_diagnostics.log")
+	warn("[K2] UI build failed: " .. tostring(_k2BuildErr))
+	-- Preserve a visible recovery surface if a UI component errors during startup.
+	pcall(function()
+		local pg = LP and (LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5))
+		if MainFrame and MainFrame.Parent then
+			MainFrame.Visible = true
+			if ScreenGui then ScreenGui.Enabled = true end
+		elseif pg then
+			local fallback = pg:FindFirstChild("K2CodeSniperRecovery")
+			if not fallback then
+				fallback = Instance.new("ScreenGui")
+				fallback.Name = "K2CodeSniperRecovery"
+				fallback.ResetOnSpawn = false
+				fallback.DisplayOrder = 10000
+				fallback.Parent = pg
+				local panel = Instance.new("Frame")
+				panel.Size = UDim2.fromOffset(260, 110)
+				panel.Position = UDim2.new(1, -275, 0, 20)
+				panel.BackgroundColor3 = Color3.fromRGB(24, 18, 28)
+				panel.BorderSizePixel = 0
+				panel.Parent = fallback
+				local title = Instance.new("TextLabel")
+				title.Size = UDim2.new(1, -16, 0, 30)
+				title.Position = UDim2.fromOffset(8, 6)
+				title.BackgroundTransparency = 1
+				title.Text = "K2 Code Sniper"
+				title.TextColor3 = Color3.fromRGB(255, 255, 255)
+				title.Font = Enum.Font.GothamBold
+				title.TextSize = 16
+				title.Parent = panel
+				local detail = Instance.new("TextLabel")
+				detail.Size = UDim2.new(1, -16, 0, 58)
+				detail.Position = UDim2.fromOffset(8, 38)
+				detail.BackgroundTransparency = 1
+				detail.TextWrapped = true
+				detail.Text = "Main interface startup failed. The exact error is printed in executor output."
+				detail.TextColor3 = Color3.fromRGB(230, 210, 230)
+				detail.Font = Enum.Font.Gotham
+				detail.TextSize = 11
+				detail.Parent = panel
+			end
+		end
+	end)
 end
-
 print("[K2 Code Sniper V2] Halloween Edition · Headless AI · LTM glass · auto-save ON")
 print("[K2] Parent:", ScreenGui and ScreenGui.Parent and ScreenGui.Parent.Name)
